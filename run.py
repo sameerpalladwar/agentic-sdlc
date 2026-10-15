@@ -30,7 +30,7 @@ def execute(args: argparse.Namespace) -> dict:
         run_dir.mkdir(parents=True, exist_ok=False)
     elif not (run_dir / "checkpoints.sqlite").is_file():
         raise ValueError("Unknown run: no persistent checkpoint found.")
-    for name in ("checkpoints.sqlite", "requirements.json", "status.json"):
+    for name in ("checkpoints.sqlite", "requirements.json", "design.json", "status.json"):
         if (run_dir / name).is_symlink():
             raise ValueError("Run artifacts must not be symlinks.")
 
@@ -38,7 +38,7 @@ def execute(args: argparse.Namespace) -> dict:
     with SqliteSaver.from_conn_string(str(run_dir / "checkpoints.sqlite")) as saver:
         graph = build_graph(saver)
         if args.command == "start":
-            result = graph.invoke({"requirement": args.requirement, "status": "pending"}, config)
+            result = graph.invoke({"requirement": args.requirement, "status": "pending", "through": args.through}, config)
         else:
             snapshot = graph.get_state(config)
             if not any(task.interrupts for task in snapshot.tasks):
@@ -49,7 +49,8 @@ def execute(args: argparse.Namespace) -> dict:
             result = graph.invoke(Command(resume=decision), config)
         report = {"run_id": run_id, "thread_id": run_id, "status": result["status"],
                   "requirements": result.get("requirements"), "error": result.get("error"),
-                  "clarifications": result.get("clarifications", [])}
+                  "clarifications": result.get("clarifications", []),
+                  "through": result.get("through", "requirements"), "design": result.get("design")}
         if result.get("__interrupt__"):
             report["status"] = "paused"
             report["open_questions"] = result["__interrupt__"][0].value["open_questions"]
@@ -57,6 +58,9 @@ def execute(args: argparse.Namespace) -> dict:
     if report["requirements"] is not None or (run_dir / "requirements.json").exists():
         (run_dir / "requirements.json").write_text(
             json.dumps(report["requirements"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if report["design"] is not None or (run_dir / "design.json").exists():
+        (run_dir / "design.json").write_text(
+            json.dumps(report["design"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     (run_dir / "status.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
 
@@ -66,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     start = commands.add_parser("start", help="Start a new persistent run")
     start.add_argument("--requirement", required=True)
+    start.add_argument("--through", choices=["requirements", "design"], default="requirements",
+                       help="Final stage to execute (persisted for resume)")
     resume = commands.add_parser("resume", help="Answer questions or reject a paused run")
     resume.add_argument("--run-id", required=True)
     choice = resume.add_mutually_exclusive_group(required=True)

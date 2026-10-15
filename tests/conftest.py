@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import agents.requirements as agent
+import agents.design as design
 
 
 @pytest.fixture(autouse=True)
@@ -15,6 +16,8 @@ def isolated_llm(monkeypatch):
     client = MagicMock()
     client.__enter__.return_value = client
     monkeypatch.setattr(agent, "OpenAI", MagicMock(return_value=client))
+    monkeypatch.setattr(design, "load_dotenv", lambda *args: None)
+    monkeypatch.setattr(design, "OpenAI", MagicMock(return_value=client))
     return client
 
 

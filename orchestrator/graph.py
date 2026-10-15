@@ -4,10 +4,15 @@ from langgraph.types import interrupt
 
 from orchestrator.state import WorkflowState
 from agents.requirements import requirements_agent
+from agents.design import design_agent
 
 
 def route_requirements(state: WorkflowState) -> str:
-    return "pause" if state["status"] == "needs_human_clarification" else END
+    if state["status"] == "needs_human_clarification":
+        return "pause"
+    if state["status"] == "requirements_complete" and state.get("through") == "design":
+        return "design"
+    return END
 
 
 def mark_paused(state: WorkflowState) -> dict:
@@ -39,10 +44,12 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     """Build the requirements workflow; callers supply durable checkpointing."""
     graph = StateGraph(WorkflowState)
     graph.add_node("requirements", requirements_agent)
+    graph.add_node("design", design_agent)
+    graph.add_edge("design", END)
     graph.add_node("pause", mark_paused)
     graph.add_node("clarification", clarify)
     graph.add_edge(START, "requirements")
-    graph.add_conditional_edges("requirements", route_requirements, ["pause", END])
+    graph.add_conditional_edges("requirements", route_requirements, ["pause", "design", END])
     graph.add_edge("pause", "clarification")
     graph.add_conditional_edges("clarification", route_clarification, ["requirements", END])
     return graph.compile(checkpointer=checkpointer)
