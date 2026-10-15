@@ -7,6 +7,7 @@ from agents.developer import generate_task
 from models.design import DesignOutput
 from models.planning import ExecutionPlan
 from models.requirements import RequirementsOutput
+from orchestrator.dependencies import validate_dependencies
 from orchestrator.file_writer import SafeWorkspace
 from orchestrator.state import WorkflowState
 from orchestrator.task_plan import calculate_readiness, validate_execution_plan
@@ -45,9 +46,13 @@ def select_task(state: WorkflowState) -> dict:
     try:
         _, _, plan = development_inputs(state)
         with SafeWorkspace(state["run_id"]) as workspace:
-            workspace.snapshot()
+            files = workspace.snapshot()
         plan.ready_task_ids, plan.blocked_task_ids = calculate_readiness(plan.tasks)
         if all(t.status == "completed" for t in plan.tasks):
+            issues = validate_dependencies(files, final=True)
+            if issues:
+                return {"status": "failed", "active_task": None, "development_issues": issues,
+                        "error": "Dependency validation failed; review development_issues before QA."}
             return {"status": "development_complete", "active_task": None, "plan": plan.model_dump(), "error": None}
         failed = any(t.status == "failed" for t in plan.tasks)
         if failed or state.get("development_used", 0) >= state.get("development_budget", 20) or not plan.ready_task_ids:
@@ -96,6 +101,11 @@ def developer_agent(state: WorkflowState) -> dict:
                     raise ValueError("Generated files must exactly match the task's declared artifacts.")
                 if [m.check for m in output.acceptance_check_mapping] != task.acceptance_checks:
                     raise ValueError("Developer output must map every acceptance check in order.")
+                candidate = {**workspace.snapshot(), **{f.path: f.content for f in output.files}}
+                issues = validate_dependencies(candidate)
+                if issues:
+                    record["issues"] = issues
+                    raise ValueError("Dependency validation failed.")
                 workspace.persist(output, fingerprint)
             record["generated_files"] = [str(workspace.target(f.path)) for f in output.files]
             record["result"] = output.model_dump()
@@ -103,7 +113,7 @@ def developer_agent(state: WorkflowState) -> dict:
         record["status"] = "completed"
     except (ValueError, TypeError, OSError, SyntaxError) as exc:
         safe_reasons = {
-            "Task attempt limit reached.", "Task is not ready: dependencies must be completed.",
+            "Dependency validation failed.", "Task attempt limit reached.", "Task is not ready: dependencies must be completed.",
             "Developer output has the wrong task ID.", "Developer could not complete the task.",
             "Generated files must exactly match the task's declared artifacts.",
             "Developer output must map every acceptance check in order.",

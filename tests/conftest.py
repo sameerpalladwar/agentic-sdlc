@@ -58,7 +58,7 @@ def design_payload():
         "architecture_summary": "A FastAPI service stores URL mappings in SQLite.",
         "technology_stack": [{"name": name, "purpose": purpose, "rationale": "Simple MVP default"}
                              for name, purpose in [("FastAPI", "HTTP API"), ("SQLite", "Persistence"), ("pytest", "Tests")]],
-        "components": [{"name": "URL API", "responsibilities": ["Validate and shorten URLs"], "dependencies": ["URL repository"]}],
+        "components": [{"name": "URL API", "responsibilities": ["Validate and shorten URLs"], "dependencies": ["SQLite"]}],
         "api_endpoints": [{"method": "POST", "path": "/urls", "request": "JSON url: valid HTTP URL",
                            "response": "201 JSON short_url: string", "errors": ["422 invalid URL"]}],
         "data_models": [{"name": "URLMapping", "fields": [{"name": "code", "type": "text", "constraints": "unique primary key"}], "relationships": []}],

@@ -8,11 +8,18 @@ from openai import APIConnectionError
 from pydantic import ValidationError
 
 import agents.design as agent
+from orchestrator.design_validation import design_validator, design_safe_stop
 from models.design import DesignOutput
 from orchestrator.graph import build_graph
 import run
 
 
+
+
+def attempt(state):
+    generated = agent.design_agent(state)
+    checked = design_validator({**state, **generated})
+    return {**generated, **checked, **(design_safe_stop(checked) if checked["design_validation_status"] == "invalid" else {})}
 
 
 def response(payload):
@@ -26,7 +33,7 @@ def state(payload):
 
 def test_success(isolated_llm, payload, design_payload):
     isolated_llm.responses.parse.return_value = response(design_payload)
-    result = agent.design_agent(state(payload))
+    result = attempt(state(payload))
     assert result["status"] == "design_complete"
     assert result["design"] == design_payload
     kwargs = isolated_llm.responses.parse.call_args.kwargs
@@ -39,7 +46,7 @@ def test_success(isolated_llm, payload, design_payload):
 
 @pytest.mark.parametrize("requirements", [None, {}, {"summary": "bad"}])
 def test_missing_requirements(requirements, isolated_llm):
-    result = agent.design_agent(state(requirements))
+    result = attempt(state(requirements))
     assert result["status"] == "failed"
     isolated_llm.responses.parse.assert_not_called()
 
@@ -48,13 +55,13 @@ def test_missing_requirements(requirements, isolated_llm):
 def test_ineligible_status(status, payload, isolated_llm):
     data = state(payload)
     data["status"] = status
-    assert agent.design_agent(data)["status"] == "failed"
+    assert attempt(data)["status"] == "failed"
     isolated_llm.responses.parse.assert_not_called()
 
 
 def test_blocking_requirements_even_with_complete_status(payload, isolated_llm):
     payload.update(requires_human_clarification=True, open_questions=["What behavior?"])
-    assert agent.design_agent(state(payload))["status"] == "failed"
+    assert attempt(state(payload))["status"] == "failed"
     isolated_llm.responses.parse.assert_not_called()
 
 
@@ -77,7 +84,7 @@ def test_schema_validation(design_payload, change):
 @pytest.mark.parametrize("parsed", [None, {}, "bad JSON"])
 def test_invalid_llm_response(parsed, isolated_llm, payload):
     isolated_llm.responses.parse.return_value = response(parsed)
-    result = agent.design_agent(state(payload))
+    result = attempt(state(payload))
     assert result["status"] == "failed"
     assert result["design"] is None
 
@@ -91,12 +98,12 @@ def test_traceability_validation(change, isolated_llm, payload, design_payload):
     else:
         design_payload["story_traceability"][0]["acceptance_criteria_coverage"] *= 2
     isolated_llm.responses.parse.return_value = response(design_payload)
-    assert agent.design_agent(state(payload))["status"] == "failed"
+    assert attempt(state(payload))["status"] == "failed"
 
 
 def test_api_error(isolated_llm, payload):
     isolated_llm.responses.parse.side_effect = APIConnectionError(request=httpx.Request("POST", "https://api.openai.com"))
-    result = agent.design_agent(state(payload))
+    result = attempt(state(payload))
     assert result["status"] == "failed"
     assert result["design"] is None
     assert "OpenAI design request failed" in result["error"]
@@ -104,7 +111,7 @@ def test_api_error(isolated_llm, payload):
 
 def test_missing_configuration(monkeypatch, isolated_llm, payload):
     monkeypatch.delenv("OPENAI_API_KEY")
-    assert agent.design_agent(state(payload))["status"] == "failed"
+    assert attempt(state(payload))["status"] == "failed"
     isolated_llm.responses.parse.assert_not_called()
 
 
@@ -112,13 +119,13 @@ def test_missing_prompt(monkeypatch, isolated_llm, payload):
     def missing(*args):
         raise FileNotFoundError
     monkeypatch.setattr(agent, "load_prompt", missing)
-    assert agent.design_agent(state(payload))["error"] == "Unable to load the design prompt."
+    assert "Unable to load the design prompt." in attempt(state(payload))["error"]
     isolated_llm.responses.parse.assert_not_called()
 
 
 def test_incomplete(isolated_llm, payload, design_payload):
     isolated_llm.responses.parse.return_value = SimpleNamespace(status="incomplete", output_parsed=design_payload)
-    assert agent.design_agent(state(payload))["status"] == "failed"
+    assert attempt(state(payload))["status"] == "failed"
 
 
 def test_clear_through_design(tmp_path, monkeypatch, capsys, isolated_llm, payload, design_payload):
@@ -175,7 +182,7 @@ def test_failure_or_rejection_skips_design(tmp_path, monkeypatch, capsys, isolat
 
 def test_design_failure_preserves_requirements(tmp_path, monkeypatch, capsys, isolated_llm, payload):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
-    isolated_llm.responses.parse.side_effect = [response(payload), response({})]
+    isolated_llm.responses.parse.side_effect = [response(payload), response({}), response({}), response({})]
     assert run.main(["start", "--through", "design", "--requirement", "Shorten URLs"]) == 1
     failed = json.loads(capsys.readouterr().out)
     assert failed["status"] == "failed"

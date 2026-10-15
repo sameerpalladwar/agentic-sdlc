@@ -9,7 +9,10 @@ from uuid import uuid4
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
+from orchestrator import file_writer
 from orchestrator.graph import build_graph
+from orchestrator.file_writer import atomic_write
+from orchestrator.design_validation import redact
 
 
 RUNS_DIR = Path(__file__).resolve().parent / "workspace" / "runs"
@@ -30,7 +33,7 @@ def execute(args: argparse.Namespace) -> dict:
         run_dir.mkdir(parents=True, exist_ok=False)
     elif not (run_dir / "checkpoints.sqlite").is_file():
         raise ValueError("Unknown run: no persistent checkpoint found.")
-    for name in ("checkpoints.sqlite", "requirements.json", "design.json", "plan.json", "development_results.json", "status.json"):
+    for name in ("checkpoints.sqlite", "requirements.json", "design.json", "plan.json", "development_results.json", "qa_results.json", "recovery_history.json", "status.json"):
         if (run_dir / name).is_symlink():
             raise ValueError("Run artifacts must not be symlinks.")
 
@@ -39,12 +42,21 @@ def execute(args: argparse.Namespace) -> dict:
         graph = build_graph(saver)
         if args.command == "start":
             result = graph.invoke({"requirement": args.requirement, "status": "pending", "through": args.through,
-                                   "run_id": run_id, "development_budget": args.development_budget}, config)
+                                   "run_id": run_id, "development_budget": args.development_budget,
+                                   "design_retry_count": 0, "design_max_retries": 2, "recovery_history": []}, config)
+        elif args.command == "qa":
+            snapshot = graph.get_state(config)
+            if snapshot.values.get("status") not in {"development_complete", "qa_passed", "qa_failed", "qa_blocked", "qa_error"}:
+                raise ValueError("QA requires a run with completed development.")
+            graph.update_state(config, {"through": "qa", "status": "development_complete", "active_task": None,
+                                        "qa_local_authorized": args.authorize_local_execution,
+                                        "application_dir": str(file_writer.OUTPUT_ROOT / run_id)}, as_node="development_select")
+            result = graph.invoke(None, config)
         else:
             snapshot = graph.get_state(config)
             interrupted = any(task.interrupts for task in snapshot.tasks)
             if not interrupted:
-                if args.retry_development and snapshot.values.get("status") == "developing" and snapshot.next:
+                if args.retry_development and snapshot.values.get("status") in {"developing", "repairing", "development_complete", "qa_failed", "qa_passed"} and snapshot.next:
                     # A process stopped between development checkpoints; replay only pending nodes.
                     result = graph.invoke(None, config)
                 else:
@@ -64,7 +76,16 @@ def execute(args: argparse.Namespace) -> dict:
                   "clarifications": result.get("clarifications", []),
                   "through": result.get("through", "requirements"), "design": result.get("design"),
                   "plan": result.get("plan"),
-                  "development_results": result.get("development_results")}
+                  "development_issues": result.get("development_issues", []),
+                  "development_results": result.get("development_results"),
+                  "qa_repair_count": result.get("qa_repair_count", 0),
+                  "qa_results": result.get("qa_results"),
+                  "design_validation_status": result.get("design_validation_status"),
+                  "design_validation_issues": result.get("design_validation_issues", []),
+                  "design_retry_count": result.get("design_retry_count", 0),
+                  "design_max_retries": result.get("design_max_retries", 2),
+                  "recovery_history": result.get("recovery_history", []),
+                  "failure_reason": result.get("failure_reason")}
         if result.get("__interrupt__"):
             report["status"] = "paused"
             report["pause"] = result["__interrupt__"][0].value
@@ -83,6 +104,17 @@ def execute(args: argparse.Namespace) -> dict:
     if report["development_results"] is not None:
         (run_dir / "development_results.json").write_text(
             json.dumps(report["development_results"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if report["qa_results"] is not None:
+        (run_dir / "qa_results.json").write_text(
+            json.dumps(report["qa_results"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if report["recovery_history"]:
+        history = redact(report["recovery_history"])
+        for attempt in history:
+            if attempt.get("stage") in {"qa", "developer_repair", "qa_final"}:
+                continue
+            atomic_write(run_dir / "design_attempts" / f"attempt_{attempt['attempt']:03d}.json",
+                         json.dumps(attempt, indent=2, ensure_ascii=False) + "\n")
+        atomic_write(run_dir / "recovery_history.json", json.dumps(history, indent=2, ensure_ascii=False) + "\n")
     (run_dir / "status.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
 
@@ -92,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     start = commands.add_parser("start", help="Start a new persistent run")
     start.add_argument("--requirement", required=True)
-    start.add_argument("--through", "--stop-after", choices=["requirements", "design", "planning", "development"], default="requirements",
+    start.add_argument("--through", "--stop-after", choices=["requirements", "design", "planning", "development", "qa"], default="requirements",
                        help="Final stage to execute (persisted for resume)")
     start.add_argument("--development-budget", type=int, choices=range(1, 51), default=20, metavar="1..50")
     resume = commands.add_parser("resume", help="Answer questions or reject a paused run")
@@ -101,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
     choice.add_argument("--answers", help="Answers to the open questions as plain text")
     choice.add_argument("--retry-development", action="store_true", help="Retry failed development or continue after budget exhaustion")
     choice.add_argument("--reject", action="store_true", help="End the run without another LLM call")
+    qa = commands.add_parser("qa", help="Test an existing reviewed generated application")
+    qa.add_argument("--run-id", required=True)
+    qa.add_argument("--authorize-local-execution", action="store_true",
+                    help="Authorize local execution of this reviewed run; a venv is NOT a sandbox")
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] == "--requirement":
         arguments.insert(0, "start")  # Retain the Stage 1 CLI shorthand.
@@ -114,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "failed", "error": str(exc)}), file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, ensure_ascii=False))
-    return 1 if report["status"] == "failed" else 0
+    return 1 if report["status"] in {"failed", "qa_failed", "qa_error"} else (3 if report["status"] == "qa_blocked" else 0)
 
 
 if __name__ == "__main__":

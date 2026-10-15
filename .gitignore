@@ -8,3 +8,6 @@ __pycache__/
 *.db
 workspace/output_code/
 workspace/runs/
+workspace/qa_venvs/
+workspace/tools/
+workspace/python/

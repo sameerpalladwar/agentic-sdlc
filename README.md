@@ -6,6 +6,7 @@ Stage 2 pauses ambiguous runs for human clarification and resumes from persisten
 Stage 3 optionally converts completed requirements into a reviewable technical design.
 Stage 4 optionally converts that design into a validated development task plan.
 Stage 5 optionally generates application files one task at a time without executing them.
+Stage 6 runs approved local pytest and records actual test results.
 
 ## Architecture Overview
 
@@ -108,7 +109,7 @@ python run.py --requirement "Build a URL shortener service" --through design
 ```
 
 `--through` defaults to `requirements`, preserving Stage 1 and Stage 2 behavior.
-`--stop-after` is an alias for `--through`; both accept `requirements`, `design`, `planning`, or `development`.
+`--stop-after` is an alias for `--through`; both accept `requirements`, `design`, `planning`, `development`, or `qa`.
 It is stored in the checkpoint. If a design-enabled run pauses, answer it with
 the usual resume command; no need to re-enter requirements or repeat the option:
 
@@ -133,7 +134,8 @@ inferred choices are documented as assumptions, with tradeoffs recorded as risks
 technology stack, components, API endpoints (method/path/request/response/errors),
 data models, non-functional design, ordered implementation plan, assumptions,
 risks, and story traceability. Traceability must contain every story exactly once
-and one coverage explanation per acceptance criterion. Structural validation
+and one coverage explanation per acceptance criterion. Stage 6.5 preserves failed
+attempts and uses up to two bounded correction retries before a safe stop. Structural validation
 does not establish technical correctness; review the design before implementation.
 
 Clear requirements route `requirements -> design -> END`, ending with
@@ -288,7 +290,7 @@ attempt requires a new run after review. Completed runs cannot be resumed.
 No generated code, imports, tests, dependency installation, or model-suggested
 commands are executed by the harness. Acceptance mapping is the LLM's explanation,
 not independent verification. Syntax validation does not establish runtime
-correctness, security, or completeness. QA and Review Agents are not implemented.
+correctness, security, or completeness. During development, QA has not yet run. The Review Agent is not implemented.
 `pytest.ini` restricts harness test discovery to tests/ so generated tests are
 never collected by a harness pytest run. Pass `tests` explicitly when testing a
 generated app inside this repository. Review the generated code and its README
@@ -315,6 +317,132 @@ curl -i http://127.0.0.1:8000/nonexistent-code
 Use the request field and entry point in the actual generated README if its
 approved design differs. Runtime commands above are for manual use only.
 
+## QA Agent — local MVP
+
+Generate through QA with the existing workflow:
+
+```bash
+python run.py --requirement "Build a URL shortener using FastAPI and SQLite with POST /shorten and GET /{short_code}." --stop-after qa
+```
+
+Generation does not grant permission to execute code. QA initially returns
+`qa_blocked`. Review the generated application, tests, conftest files, and dependency
+list. Prepare a dedicated per-run environment yourself, then authorize execution:
+
+```bash
+python3.12 -m venv workspace/qa_venvs/<run_id>
+# Only after reviewing and approving the dependency list:
+workspace/qa_venvs/<run_id>/bin/python -m pip install -r workspace/output_code/<run_id>/requirements.txt
+workspace/qa_venvs/<run_id>/bin/python -m pip install pytest httpx
+python run.py qa --run-id <run_id> --authorize-local-execution
+```
+
+`QA_LOCAL_PYTHON` can name that environment's absolute bin/python path. It must
+be the dedicated `workspace/qa_venvs/<run_id>/` environment, with system site
+packages disabled. The harness never installs dependencies. The `qa` command
+reuses the run's thread/checkpoint and completed development state. Calling it
+without the approval flag blocks execution. Actionable pytest failures may trigger the bounded source-repair loop below.
+
+**Local pytest is not sandboxed. A virtual environment is NOT a security boundary.**
+Only run trusted, reviewed code: it can access your account's files and network.
+The runner filters inherited environment variables, copies managed source into a
+disposable working directory, and invokes only `python -m pytest -q` using
+`subprocess.run(shell=False)` with a 60-second timeout. It captures at most 32 KiB
+per output stream and applies POSIX CPU/file-size limits. It does not contain
+hostile code or reliably terminate processes spawned by tests. Generated databases,
+.venv, and control files are not copied. A harness-owned pytest.ini overrides
+project test options, and third-party pytest plugin autoloading is disabled.
+
+`qa_results.json`, state, and `status.json` record `status`, `exit_code`, test counts,
+`duration_seconds`, `error_summary`, `test_output`, and acceptance criteria.
+A zero exit code requires actual non-skipped tests in pytest's final summary.
+Exit five or an unrecognized/missing summary is blocked, not success. Failures and
+timeouts cannot pass. Counts are taken from the final summary, not an LLM.
+
+There is no test-to-criterion mapping in this MVP: every acceptance criterion is
+`not_verified`, even when the suite passes. `qa_passed` describes the test suite
+only; business acceptance, review, and final approval remain pending. The QA node
+runs after completed development, preserving existing clarification, recovery,
+and checkpoint routing. It never marks the entire SDLC completed. CLI exit codes
+are 0 for qa_passed, 1 for qa_failed, and 3 for qa_blocked.
+
+## Design correction and safe recovery (Stage 6.5)
+
+Design generation now routes through a separate deterministic validator before
+planning or later stages. Existing CLI commands remain unchanged. Each run allows
+one initial design attempt and **at most two correction retries**:
+
+```text
+design -> design_validator
+  valid                       -> planning (or END when stopping at design)
+  retryable, budget remaining -> design_retry -> design
+  non-retryable or exhausted  -> design_safe_stop -> END
+```
+
+The retry node increments `design_retry_count` in a checkpoint **before** the next
+network request. SDK transport retries are disabled for design generation, so
+there are at most three design generation requests. The correction context includes
+the original structured requirements, previous candidate when available, exact
+validation issues, and instructions to preserve valid sections while fixing defects.
+No requirements or design scope is silently replaced to make validation pass.
+
+`orchestrator/design_validation.py` checks the Pydantic contract, every story ID
+exactly once (including excluded stories), criterion coverage count and nonempty
+explanations, declared component/endpoint/data-model references, component
+references in dependencies, unique design element names, and nonempty mandatory
+content. It also checks explicit HTTP method/path requirements and recognized
+positive technology choices (FastAPI, SQLite, PostgreSQL, Django, Flask). It does
+not infer all possible architecture constraints from natural language or prove
+that prose explanations satisfy business requirements.
+
+New canonical traceability references are `component:<name>`,
+`endpoint:<METHOD path>`, and `data_model:<name>`. Existing descriptive references
+are accepted only when composed of declared names and recognized labels.
+
+Each validation issue contains `code`, `field`, `message`, `retryable`, and
+`affected_story_ids`. For example:
+
+```json
+{
+  "code": "MISSING_STORY",
+  "field": "story_traceability",
+  "message": "Add exactly one traceability entry for US-005.",
+  "retryable": true,
+  "affected_story_ids": ["US-005"]
+}
+```
+
+Schema-invalid or incomplete model output and traceability/reference defects are
+retryable. Missing credentials/prompts, permissions, API quota/connectivity,
+unsupported SDK/schema requests, refusals, and credential-like output are
+non-retryable: correcting a design cannot resolve those conditions. Safe stop
+returns `failed`, actionable `failure_reason` and issues, and does not run planning,
+development, or QA. No extra human approval or autonomous shell execution is added.
+
+State and SQLite store `design_validation_status`, `design_validation_issues`,
+`design_retry_count`, `design_max_retries`, `recovery_history`, and `failure_reason`.
+The run's thread ID is unchanged during correction. Existing human clarification
+interrupt/resume remains before design. Safe-stopped runs require a new run after
+review; this change does not add a manual resume command for terminal design errors.
+
+Under `workspace/runs/<run_id>/`, the CLI persists:
+
+- `design_attempts/attempt_001.json`, etc.: candidate and structured issues per attempt.
+- `recovery_history.json`: ordered attempts, verdicts, and retry counts.
+- `design.json`: only the validated successful design.
+- `status.json`: final status, counters, issues, and failure reason.
+
+Attempt data is checkpointed at every validator step; JSON files are materialized
+when the CLI invocation returns. Secret-like strings and known credential values
+are redacted. Raw API exception bodies are never stored. If SDK parsing fails
+before exposing an object, the attempt records schema issues with a null candidate.
+
+For historical run `763ca144ff8940cbb1beabf0b6e44c64`, the old agent discarded the
+failed response. Its checkpoint contains five stories and `design: null`, so the
+exact historical defect cannot be recovered. Recovery tests reproduce the old
+failure category with missing story coverage; they do not claim to reconstruct
+the lost response. No real API key is needed for those tests.
+
 ## Test
 
 ```bash
@@ -332,12 +460,58 @@ safe failures, artifact persistence, and clarification resume through planning.
 Developer tests cover persistence, unsafe paths, dependency transitions, failure/retry,
 budgets, journal recovery, and checkpoint replay without executing generated code.
 
-Requirements, Design, Planning, and Developer Agents are implemented. The architecture
-diagram illustrates the broader planned workflow; QA and Review Agents remain future work.
+Requirements, Design, Planning, Developer, and QA Agents are implemented. The
+Review Agent and final approval stages remain future work.
 
-For Python 3.14 generated apps, the developer prompt requires Pydantic V2 and
-compatible FastAPI dependencies, all imported packages, and explicit router
+For Python 3.12 generated apps, the developer prompt requires the fixed dependency
+profile below, all imported packages, and explicit router
 registration. The Uvicorn module must match the actual generated file layout.
 Redirect examples use GET (`curl -i`), because HEAD (`curl -I`) is not implicitly
 supported by a GET-only endpoint. Generated app requirements belong in its own
 run directory, separate from this harness's requirements.txt.
+
+## Generated application dependencies
+
+Generated MVP applications target Python 3.12; the harness may use a different
+Python version. The Developer prompt and static validator share a fixed FastAPI
+profile in `orchestrator/dependencies.py`. Validation rejects pip entries for
+standard-library modules, non-exact or conflicting pins, missing imported packages,
+and unsupported runtime documentation. Issues appear in task results or
+`development_issues` and prevent development completion. This is a static policy,
+not a universal dependency resolver; review additional packages and use `pip check`
+in the dedicated Python 3.12 environment. No application code is imported by
+validation. QA tests still require explicit authorization.
+
+## Developer–QA correction
+
+After explicitly authorized QA, an exit-code-1 pytest failure with named failing
+tests routes through `qa_assess -> repair_begin -> developer_repair -> qa`.
+The same run ID and managed workspace are retained. At most two repairs are
+attempted over the lifetime of the run; running QA again does not reset this budget.
+Each repair receives approved requirements/design, current files, exact failing
+test names and captured tracebacks, and prior attempts. No dependencies are installed.
+The execution authorization covers QA reruns after these targeted source repairs.
+
+Only existing source cited by tracebacks or directly imported by failing tests
+is eligible. Tests, pytest settings, dependencies, and unrelated files are excluded.
+Existing validation guards must remain structurally unchanged. A fix that needs
+test changes or guard changes stops for explicit human review; there is no automatic
+test-edit approval path. These conservative static checks cannot prove semantic
+security or correctness of model-generated repairs. Local execution remains trusted
+and unsandboxed; review is still required before final approval.
+
+`qa_passed` ends this MVP through QA without final human approval. Missing execution
+approval, collection/configuration errors, timeout, rejected repairs, or exhausted
+budget stop safely. `recovery_history.json` and SQLite checkpoints retain QA reports,
+failure categories, repair attempts/changed files, and final outcome. Acceptance
+criteria remain `not_verified`. Design attempt artifacts remain separate.
+
+```bash
+python run.py qa --run-id <run_id> --authorize-local-execution
+# If the process stopped between repair checkpoints, replay pending work:
+python run.py resume --run-id <run_id> --retry-development
+```
+
+Interrupted repairs reuse managed file receipts instead of repeating successful
+writes. QA may execute again after a crash before its checkpoint was saved. The
+source validator is deliberately conservative and is not a general program verifier.

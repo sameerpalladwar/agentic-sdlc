@@ -47,3 +47,23 @@ Return the supplied DesignOutput schema, with all fields present:
   in its original order. Explain how the design supports and can test each criterion.
   For excluded stories explain the exclusion instead of designing their feature.
 Use empty lists for assumptions, risks, and non_functional_design when appropriate.
+
+## Deterministic validation and correction
+Before returning, enumerate every supplied user story ID, including wont stories,
+and include each ID exactly once in story_traceability. Never omit an ID or add
+an invented ID. Keep exactly one nonempty acceptance_criteria_coverage explanation
+per criterion, in the same order as the input. Excluded stories must explicitly
+explain exclusion rather than introduce their feature.
+
+Use exact canonical design_elements references: component:<declared component name>,
+endpoint:<METHOD path>, or data_model:<declared data model name>. Do not refer to
+nonexistent components. Component dependencies must name a declared component or
+technology_stack entry exactly. Component names, data model names, and method/path
+pairs must be unique. Preserve explicitly requested HTTP endpoints and technologies.
+
+A correction request includes current_invalid_design and structured validation_issues
+with code, field, message, retryable, and affected_story_ids. Fix those defects only,
+preserving valid sections, approved scope, and valid traceability. Return the full
+corrected object, not a patch or a description. Never treat validation as optional
+or claim success without producing a schema-valid design. The harness permits at
+most two correction attempts after the initial generation.

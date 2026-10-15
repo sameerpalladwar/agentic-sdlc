@@ -222,12 +222,12 @@ def test_resume_through_planning(tmp_path, monkeypatch, capsys, isolated_llm, pa
 
 def test_design_failure_skips_planning(tmp_path, monkeypatch, capsys, isolated_llm, payload):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
-    isolated_llm.responses.parse.side_effect = [response(payload), response(None)]
+    isolated_llm.responses.parse.side_effect = [response(payload), response(None), response(None), response(None)]
     assert run.main(["--requirement", "Shorten URLs", "--through", "planning"]) == 1
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "failed"
     assert result["plan"] is None
-    assert isolated_llm.responses.parse.call_count == 2
+    assert isolated_llm.responses.parse.call_count == 4
 
 
 @pytest.mark.parametrize("name", ["OPENAI_API_KEY", "OPENAI_MODEL"])
