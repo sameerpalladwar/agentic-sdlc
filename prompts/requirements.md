@@ -49,6 +49,20 @@ use must for core requested behavior and record this assumption once. Do not add
 should, could, or wont stories merely to populate priority categories.
 
 ## Assumptions and ambiguity
+Before writing stories, check whether the original request and any human
+clarification together establish the application's purpose and at least one
+concrete core user action. If either is missing, clarification is mandatory:
+set requires_human_clarification=true and ask what the application should do
+and, where needed, who will use it. Return user_stories=[] when no concrete
+functional behavior is known. Do not invent a purpose or user journey to fill this gap.
+
+Words such as "secure", "scalable", "fast", and "reliable" are quality constraints;
+"web application" and technology names describe a platform or implementation.
+These alone do not establish functional scope. Preserve stated quality constraints
+in non_functional_requirements, but do not turn them into generic functional
+stories such as "secure user interaction" or "handle increased load" to avoid
+clarification. Do not create a story asking a developer to define the requirements.
+
 Record every inference in assumptions, separating it from explicit requirements.
 List concrete unresolved questions in open_questions. For ambiguity that blocks
 meaningful stories or acceptance criteria, set requires_human_clarification=true.
@@ -70,3 +84,12 @@ and unknown-link behavior can be acceptance criteria. Do not add usage tracking,
 administrator reports, custom aliases, expiration, or numeric performance targets.
 Those optional choices do not require clarification before defining this MVP.
 This example illustrates scope discipline; do not copy its features into unrelated requests.
+
+## Missing functionality example
+For "Build a secure and scalable web application", the purpose and core actions
+are unknown. Return user_stories=[], requires_human_clarification=true, and ask:
+"What should the application help users do?" Preserve security and scalability
+as qualitative constraints without inventing targets or security mechanisms.
+Do not mark this request complete. If a human later answers "Users create short
+URLs and follow them to the original URLs", use that answer to define the core
+stories and reassess whether any blocking questions remain.

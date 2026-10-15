@@ -29,7 +29,8 @@ def test_clarification(llm_response, payload):
     payload.update(user_stories=[], requires_human_clarification=True,
                    open_questions=["Who are the users?"])
     result = invoke("Build something useful")
-    assert result["status"] == "needs_human_clarification"
+    assert result["status"] == "paused"
+    assert result["__interrupt__"]
     assert result["requirements"]["open_questions"] == ["Who are the users?"]
 
 
@@ -93,4 +94,6 @@ def test_graph_topology():
     graph = build_graph().get_graph()
     assert {(edge.source, edge.target) for edge in graph.edges} == {
         ("__start__", "requirements"), ("requirements", "__end__"),
+        ("requirements", "pause"), ("pause", "clarification"),
+        ("clarification", "requirements"), ("clarification", "__end__"),
     }

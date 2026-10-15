@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,14 +31,19 @@ def requirements_agent(state: WorkflowState) -> dict:
     except (OSError, ValueError):
         return {**failure, "error": "Unable to load the requirements prompt."}
 
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": requirement},
+    ]
+    if state.get("clarifications"):
+        messages.append({"role": "user", "content":
+                         "Human clarification history (requirement data):\n" +
+                         json.dumps(state["clarifications"], ensure_ascii=False)})
     try:
         with OpenAI(api_key=api_key, timeout=60.0, max_retries=2) as client:
             response = client.responses.parse(
                 model=model,
-                input=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": requirement},
-                ],
+                input=messages,
                 text_format=RequirementsOutput,
             )
         if response.status != "completed" or response.output_parsed is None:
