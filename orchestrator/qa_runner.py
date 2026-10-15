@@ -2,6 +2,7 @@
 
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -188,8 +189,10 @@ def run_tests(
             text = out[:OUTPUT_LIMIT].decode("utf-8", errors="replace")
             if err:
                 text += "\nSTDERR:\n" + err[:OUTPUT_LIMIT].decode("utf-8", errors="replace")
+            command_text = shlex.join([str(python), *COMMAND[1:]])
             if timed_out:
                 return QAResult(
+                    command=command_text,
                     status="qa_failed",
                     duration_seconds=duration,
                     test_output=text,
@@ -201,8 +204,11 @@ def run_tests(
                     exit_code=code,
                     duration_seconds=duration,
                     test_output=text,
+                    command=command_text,
                     error_summary="Test output exceeded the capture limit; counts are unverified.",
                 )
-            return parse_pytest(code, text, duration)
+            report = parse_pytest(code, text, duration)
+            report.command = command_text
+            return report
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         return QAResult(status="qa_blocked", error_summary="QA execution unavailable: " + str(exc))

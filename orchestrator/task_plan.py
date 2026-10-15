@@ -10,6 +10,10 @@ class InvalidPlanError(ValueError):
     """Deterministic plan validation failed before scheduling or generation."""
 
 
+class ArtifactOwnershipError(ValueError):
+    """An otherwise parsed plan needs explicit, accurate shared-file ownership."""
+
+
 def topological_sort(tasks: list[ImplementationTask]) -> list[str]:
     """Stable Kahn sort; reject invalid edges and cycles without executing tasks."""
     by_id = {task.task_id: task for task in tasks}
@@ -55,12 +59,29 @@ def validate_artifact_ownership(plan: ExecutionPlan) -> None:
         for path in task.expected_artifacts:
             owners.setdefault(path, set()).add(task.task_id)
     shared = {path: ids for path, ids in owners.items() if len(ids) > 1}
-    justifications = {item.path: item for item in plan.shared_artifacts}
-    if len(justifications) != len(plan.shared_artifacts) or set(justifications) != set(shared):
-        raise ValueError("Every shared artifact needs exactly one explicit justification.")
-    for path, item in justifications.items():
-        if len(item.task_ids) != len(set(item.task_ids)) or set(item.task_ids) != shared[path]:
-            raise ValueError("Shared artifact justification must name exactly its owning tasks.")
+    entries: dict[str, list] = {}
+    for item in plan.shared_artifacts:
+        entries.setdefault(item.path, []).append(item)
+    problems = []
+    for path in sorted(set(shared) | set(entries)):
+        expected = sorted(shared.get(path, set()))
+        actual = entries.get(path, [])
+        if not expected:
+            problems.append(
+                f"{path}: justification has no shared ownership; actual owners={sorted(owners.get(path, set()))}"
+            )
+        elif len(actual) != 1:
+            problems.append(
+                f"{path}: expected exactly one justification for owners={expected}; found {len(actual)}"
+            )
+        elif len(actual[0].task_ids) != len(set(actual[0].task_ids)) or set(
+            actual[0].task_ids
+        ) != set(expected):
+            problems.append(
+                f"{path}: expected owners={expected}; declared task_ids={actual[0].task_ids}"
+            )
+    if problems:
+        raise ArtifactOwnershipError("Shared artifact ownership invalid: " + "; ".join(problems))
 
 
 def calculate_readiness(tasks: list[ImplementationTask]) -> tuple[list[str], list[str]]:

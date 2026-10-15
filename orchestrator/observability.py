@@ -3,7 +3,6 @@
 import functools
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -16,10 +15,17 @@ from langgraph.errors import GraphInterrupt
 
 from orchestrator.file_writer import reject_symlinks
 from orchestrator.progress import ProgressRenderer
+from orchestrator.redaction import redact_text as redact_text
+from orchestrator.redaction import terminal_text
+from orchestrator.summaries import error_details, stage_summary
 
 OBSERVERS: dict[str, "RunObserver"] = {}
 REGISTRY_LOCK = threading.Lock()
 FIELDS = {
+    "summary",
+    "error_message",
+    "duration_ms",
+    "retry_attempt",
     "stage",
     "attempt",
     "revision_id",
@@ -33,17 +39,6 @@ FIELDS = {
     "request_id",
     "task_id",
 }
-
-
-def redact_text(text: str) -> str:
-    """Redact before JSON encoding so quoted/newline-containing secrets cannot escape masking."""
-    for name, value in os.environ.items():
-        if len(value) >= 4 and re.search(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH", name, re.I):
-            text = text.replace(value, "[REDACTED]")
-    text = re.sub(r"sk-[A-Za-z0-9_-]{12,}|\bBearer\s+\S+", "[REDACTED]", text)
-    return re.sub(
-        r"(?i)(api[_-]?key|password|authorization|token)\s*[:=]\s*\S+", r"\1=[REDACTED]", text
-    )
 
 
 def safe_metadata(data: dict) -> dict:
@@ -135,8 +130,16 @@ class RunObserver:
         except (OSError, ValueError, TypeError):
             pass
 
-    def exception(self, stage: str, error: BaseException) -> None:
-        """Capture stack frames without source text, exception messages, payloads, or locals."""
+    def exception(
+        self,
+        stage: str,
+        error: BaseException,
+        *,
+        task_id: str | None = None,
+        retry_attempt: int | None = None,
+        duration_ms: float | None = None,
+    ) -> None:
+        """Capture stack frames and a sanitized message without source text or locals."""
         frames = "\n".join(
             f"File {frame.filename}, line {frame.lineno}, in {frame.name}"
             for frame in traceback.extract_tb(error.__traceback__)
@@ -146,6 +149,12 @@ class RunObserver:
             level=logging.ERROR,
             stage=stage,
             error_type=type(error).__name__,
+            error_message=terminal_text(str(error), 2000),
+            summary=terminal_text(f"{type(error).__name__}: {error}"),
+            status="failed",
+            task_id=task_id,
+            retry_attempt=retry_attempt,
+            duration_ms=duration_ms,
             stack_trace=frames,
         )
 
@@ -182,6 +191,8 @@ def observe_node(stage: str, function: Callable[[dict], dict]) -> Callable[[dict
         }
         if stage == "repair_begin":
             metadata["attempt"] += 1
+        if stage.startswith("planning"):
+            metadata["attempt"] = state.get("planning_retry_count", 0) + (stage == "planning_retry")
         if stage.startswith("design"):
             metadata["attempt"] = state.get("design_retry_count", 0)
         if stage == "human_repair":
@@ -192,37 +203,59 @@ def observe_node(stage: str, function: Callable[[dict], dict]) -> Callable[[dict
                 record.get("task_id") == state.get("active_task")
                 for record in state.get("development_results", [])
             )
-            tasks = state.get("plan", {}).get("tasks", [])
-            index = next(
-                (
-                    index
-                    for index, task in enumerate(tasks, 1)
-                    if task["task_id"] == state.get("active_task")
-                ),
-                0,
-            )
-            detail = f"{index}/{len(tasks)}"
+        metadata["retry_attempt"] = (
+            max(0, metadata["attempt"] - 1) if stage == "developer" else metadata["attempt"]
+        )
+        start_summary = stage_summary(stage, state)
+        if start_summary:
+            metadata["summary"] = terminal_text(start_summary)
         observer.emit("agent_started", **metadata)
         if stage in {"qa", "review"}:
             observer.emit("parallel_started", **metadata)
         if stage in {"repair_begin", "human_repair"}:
             observer.emit("repair_attempt", **metadata)
-        observer.progress.render(stage, "running", detail)
+        observer.progress.render(stage, "running", detail, summary=start_summary)
         try:
             result = function(state)
-        except GraphInterrupt:
+        except GraphInterrupt as interrupted:
+            pause = interrupted.args[0][0].value if interrupted.args and interrupted.args[0] else {}
+            if pause.get("kind") == "approval":
+                wait_summary = stage_summary(
+                    "approval_prepare", {**state, "status": "awaiting_approval"}, {}
+                )
+            else:
+                question = "; ".join(pause.get("open_questions", []))
+                option = (
+                    "--repo-path /path/to/application"
+                    if pause.get("kind") == "repository"
+                    else "--retry-development"
+                    if pause.get("kind") == "development"
+                    else '--answers "<your answer>"'
+                )
+                wait_summary = f"{question or pause.get('instructions', 'Human input required')}; python run.py resume --run-id {observer.run_id} {option}"
+            metadata["summary"] = terminal_text(wait_summary)
             observer.emit(
                 "human_approval_interrupt"
                 if stage == "human_approval"
                 else "human_input_interrupt",
                 **metadata,
             )
-            observer.progress.render(stage, "waiting")
+            observer.progress.render(stage, "waiting", summary=wait_summary)
             raise
         except BaseException as error:
             observer.failed_stage = stage
-            observer.exception(stage, error)
-            observer.progress.render(stage, "failed")
+            observer.exception(
+                stage,
+                error,
+                task_id=metadata["task_id"],
+                retry_attempt=metadata["retry_attempt"],
+                duration_ms=round((time.monotonic() - started) * 1000, 3),
+            )
+            observer.progress.render(
+                stage,
+                "failed",
+                summary=f"{type(error).__name__}: {terminal_text(str(error))}; details={observer.directory / 'execution.log'}",
+            )
             raise
         duration = time.monotonic() - started
         status = result.get("status", "")
@@ -234,10 +267,47 @@ def observe_node(stage: str, function: Callable[[dict], dict]) -> Callable[[dict
             status = result["development_results"][-1]["status"]
         if stage == "design" and result.get("design_generation_issues"):
             status = "failed"
-        failed = any(word in status for word in ("failed", "blocked", "error", "invalid"))
+        failed = any(word in status for word in ("failed", "blocked", "error", "invalid")) or (
+            stage == "repository_analysis" and bool(result.get("error"))
+        )
         if failed and stage not in {"validation_finish", "design_safe_stop"}:
             observer.failed_stage = stage
+        artifact = {
+            "requirements": "requirements.json",
+            "design": "design.json",
+            "design_validator": "design.json",
+            "planning": "plan.json",
+            "developer": "development_results.json",
+            "qa": "qa_results.json",
+            "review": "review_results.json",
+            "validation_gate": "validation_results.json",
+            "approval_prepare": "approval_request.json",
+            "human_approval": "approval_history.json",
+            "delivery": "final_manifest.json",
+        }.get(stage)
+        if artifact:
+            metadata["artifact"] = str(observer.directory / artifact)
+        combined = {**state, **result}
+        summary = stage_summary(stage, state, result)
+        if summary:
+            metadata["summary"] = terminal_text(summary)
+        if failed:
+            category, reason = error_details(stage, combined)
+            metadata.update(
+                error_type=terminal_text(category, 100), error_message=terminal_text(reason, 2000)
+            )
+            log_path = observer.directory / "execution.log"
+            metadata["artifact"] = str(log_path)
+            if stage.startswith("planning") and combined.get("planning_attempts"):
+                metadata["artifact"] = str(observer.directory / "planning_attempts.json")
+            summary = (
+                f"{category}: {reason}; "
+                + (summary + "; " if summary else "")
+                + f"retry={metadata['retry_attempt']}; details={metadata['artifact']}"
+            )
+            metadata["summary"] = terminal_text(summary)
         metadata.update(
+            duration_ms=round(duration * 1000, 3),
             duration_seconds=round(duration, 6),
             status=status,
             revision_id=result.get("validation_revision", metadata["revision_id"]),
@@ -261,9 +331,10 @@ def observe_node(stage: str, function: Callable[[dict], dict]) -> Callable[[dict
             "failed"
             if failed
             else "retrying"
-            if stage in {"repair_begin", "design_retry"}
+            if stage in {"repair_begin", "design_retry", "planning_retry"}
             else "completed",
             f"({duration:.2f}s)" if observer.progress.verbose else "",
+            summary=summary,
         )
         return result
 

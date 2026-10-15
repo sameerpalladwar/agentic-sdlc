@@ -526,9 +526,19 @@ receives the full package/runtime check. The FastAPI pins are a baseline: an ORM
 `sqlalchemy` also requires its own reviewed exact dependency pin. An invalid candidate leaves
 prior files intact and records task-specific `development_issues`; the existing development
 pause permits `resume --run-id <run_id> --retry-development` (at most three attempts per task).
-No new automatic Planning or dependency-repair loop is added. A final defensive check remains
+Dependency-package failures use the existing task retry flow; the separate Planning
+ownership correction described below does not repair package dependencies. A final defensive check remains
 for older checkpoints; all tasks completed does not override missing packages. A failed older
 terminal run must be reviewed and restarted, not treated as a pending interrupt.
+
+Planning shared-file ownership errors now identify file paths and expected/declared task
+owners. The rejected candidate is retained in `planning_attempts.json` and the checkpoint.
+Up to two checkpointed ownership corrections reuse the approved requirements and design;
+every corrected plan must pass the full validator before Development. Exhaustion stops
+safely. Other DAG/schema, configuration or API errors do not enter this correction loop.
+If a process stops with a pending Planning correction, the existing
+`resume --run-id <run_id> --retry-development` pending-work replay command resumes it.
+Older terminal failures that discarded their candidate must be restarted as new runs.
 
 ## Developer–QA correction
 
@@ -723,8 +733,9 @@ Each CLI invocation appends to these private per-run files:
 
 Logs use allowlisted metadata (`run_id`, stage, attempt, revision, duration, status and
 artifact names). They exclude raw source/model/state payloads, .env contents, human
-feedback and exception messages. Unexpected exceptions record type and stack frames
-without source lines or locals. Known credential values/token-like strings are redacted.
+feedback and unsanitized exception messages. Unexpected exceptions record type, a sanitized
+message, and stack frames without source lines or locals. Known credential values/token-like
+strings are redacted before formatting; terminal control sequences are removed from summaries.
 A `run_completed` log event means a CLI invocation ended; only checkpoint status
 `completed` means human-approved delivery. Logging I/O failures do not change graph state.
 Handlers are closed per invocation, so checkpoint resumes do not duplicate handlers.
@@ -732,6 +743,32 @@ Handlers are closed per invocation, so checkpoint resumes do not duplicate handl
 Progress goes to stderr: one updating line in ANSI terminals, compact stage lines in CI
 or plain terminals. QA/Review updates are serialized and combined while active. Completed
 summaries stay visible; no terminal input is read by the harness.
+
+Start lines use `[started]`; completion summaries are deterministic projections of actual
+node outputs and checkpoint state, with no additional LLM calls. For example, this offline
+CLI regression test (`pytest -q -s tests/test_progress_summaries.py::test_real_cli_summary_fixture`)
+prints:
+
+```text
+[started] Project: Determining workflow
+[completed] Project: mode=greenfield; repository=not supplied
+[started] Requirements: Generating user stories
+[completed] Requirements: 1 user story, 1 acceptance criterion, 0 open questions
+```
+
+Later stages report task/dependency counts, actual task IDs/titles and persisted-file counts,
+QA counts with the executed interpreter/command and exit code, Review finding counts and
+revision, and combined revision consistency/repair attempt. A revision is reported as not
+frozen until the snapshot exists. Missing metrics remain unreported rather than implying a
+successful test. Human interrupts include the current question or approval revision, run ID,
+and supported resume command; final delivery names its manifest and approved revision.
+
+Failure lines include the reported category and reason, task/dependency IDs when available,
+retry count and diagnostic artifact/log path. Messages without a reported cause say so.
+The existing event names and fields remain compatible; stage events also include `summary`,
+`duration_ms`, `retry_attempt`, sanitized `error_type`/`error_message`, and artifact references
+when relevant. `duration_seconds` and `attempt` remain available. Full traceback frames and
+longer sanitized diagnostic messages stay in the existing logs, not a second event stream.
 
 ```bash
 python run.py start --requirement "Shorten URLs" --verbose

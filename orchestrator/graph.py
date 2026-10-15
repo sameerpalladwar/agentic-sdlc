@@ -59,12 +59,22 @@ def route_design(state: WorkflowState) -> str:
 
 
 def route_planning(state: WorkflowState) -> str:
+    if state["status"] == "planning_invalid" and state.get("planning_retry_count", 0) < 2:
+        return "planning_retry"
     return (
         "development_prepare"
         if state["status"] == "planning_complete"
         and state.get("through") in {"development", "qa", "validation", "delivery"}
         else END
     )
+
+
+def retry_planning(state: WorkflowState) -> dict:
+    """Checkpoint the retry budget before replaying Planning with exact ownership feedback."""
+    return {
+        "status": "design_complete",
+        "planning_retry_count": state.get("planning_retry_count", 0) + 1,
+    }
 
 
 def route_selection(state: WorkflowState) -> str:
@@ -191,7 +201,11 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     )
     graph.add_edge("design_retry", "design")
     graph.add_edge("design_safe_stop", END)
-    graph.add_conditional_edges("planning", route_planning, ["development_prepare", END])
+    graph.add_node("planning_retry", observe_node("planning_retry", retry_planning))
+    graph.add_conditional_edges(
+        "planning", route_planning, ["planning_retry", "development_prepare", END]
+    )
+    graph.add_edge("planning_retry", "planning")
     graph.add_node("development_prepare", observe_node("development_prepare", prepare_development))
     graph.add_node("development_select", observe_node("development_select", select_task))
     graph.add_node("developer", observe_node("developer", developer_agent))

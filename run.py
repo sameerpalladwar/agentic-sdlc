@@ -14,10 +14,10 @@ from langgraph.types import Command
 
 from orchestrator import file_writer
 from orchestrator.artifacts import ARTIFACTS, make_report, save_report
-from orchestrator.design_validation import redact
 from orchestrator.graph import build_graph
 from orchestrator.observability import RunObserver
 from orchestrator.progress import ProgressRenderer
+from orchestrator.redaction import redact_data, terminal_text
 
 RUNS_DIR = Path(__file__).resolve().parent / "workspace" / "runs"
 VALIDATION_STATUSES = {
@@ -31,6 +31,8 @@ VALIDATION_STATUSES = {
     "validation_blocked",
 }
 REPLAY_STATUSES = VALIDATION_STATUSES | {
+    "planning_invalid",  # Pending ownership correction after a process restart.
+    "design_complete",  # Correction counter checkpointed; Planning is pending.
     "planning_complete",  # Replay a pending preparation/baseline-copy checkpoint safely.
     "developing",
     "repairing",
@@ -337,7 +339,7 @@ def parser() -> argparse.ArgumentParser:
 
 def print_summary(report: dict) -> None:
     """Print a compact result, approval context, and paths instead of the complete state."""
-    report = redact(report)
+    report = redact_data(report)
     print(f"Run {report['run_id']}: {report['status']}")
     if report.get("validation_revision"):
         print(f"Revision: {report['validation_revision']}")
@@ -406,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
         error = str(exception)
     else:
         if args.json:
-            print(json.dumps(report, indent=2, ensure_ascii=False))
+            print(json.dumps(redact_data(report), indent=2, ensure_ascii=False))
         else:
             print_summary(report)
         if report["status"] in {"failed", "qa_failed", "qa_error", "validation_failed"}:
@@ -415,9 +417,9 @@ def main(argv: list[str] | None = None) -> int:
             3 if report["status"] in {"qa_blocked", "validation_blocked", "approval_blocked"} else 0
         )
     if args.json:
-        print(json.dumps({"status": "failed", "error": error}), file=sys.stderr)
+        print(json.dumps({"status": "failed", "error": terminal_text(error)}), file=sys.stderr)
     else:
-        print(f"Failed: {error}", file=sys.stderr)
+        print(f"Failed: {terminal_text(error)}", file=sys.stderr)
     return 1
 
 

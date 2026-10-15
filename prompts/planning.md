@@ -66,3 +66,14 @@ For Brownfield mode, plan targeted enhancements to the existing analyzed files.
 The harness copies the safe repository baseline into the run's output workspace
 before development. Declare all files each task must change, preserve unrelated
 behavior, and plan tests for both existing behavior and requested enhancements.
+
+## Ownership correction
+If correction feedback is supplied, inspect its exact file paths and owner task IDs.
+Repair missing, duplicate, extraneous or mismatched shared_artifacts entries, or
+redesign file ownership while preserving required behavior and valid task dependencies.
+Return the complete plan. Use concrete reasons for real shared edits; never invent
+justifications, remove required implementation work, or weaken acceptance checks.
+Example: if TASK-001 and TASK-004 both list workspace/output_code/app/main.py,
+shared_artifacts must contain exactly one entry for that path with both task IDs
+and a justification such as initial scaffold followed by final router integration.
+TASK-004 must depend on TASK-001. If every file has one owner, shared_artifacts is [].

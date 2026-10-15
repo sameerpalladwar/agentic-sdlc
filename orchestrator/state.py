@@ -16,6 +16,7 @@ class WorkflowState(TypedDict):
         "rejected",
         "design_complete",
         "planning_complete",
+        "planning_invalid",
         "developing",
         "development_paused",
         "development_complete",
@@ -44,6 +45,10 @@ class WorkflowState(TypedDict):
     ]
     design: NotRequired[dict | None]
     plan: NotRequired[dict | None]
+    planning_retry_count: NotRequired[int]
+    planning_candidate: NotRequired[dict | None]
+    planning_validation_issues: NotRequired[list[dict]]
+    planning_attempts: NotRequired[list[dict]]
     run_id: NotRequired[str]
     development_budget: NotRequired[int]
     development_used: NotRequired[int]

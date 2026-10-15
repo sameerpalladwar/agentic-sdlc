@@ -114,7 +114,7 @@ def test_failure_names_stage_and_logs(workflow_responses, isolated_llm, capsys):
     captured = capsys.readouterr()
     assert "Failed stage: requirements" in captured.out
     assert "execution.log" in captured.out and "events.jsonl" in captured.out
-    assert "[running] Requirements:" in captured.err and "[failed] Requirements:" in captured.err
+    assert "[started] Requirements:" in captured.err and "[failed] Requirements:" in captured.err
     assert "Run " in captured.err
 
 

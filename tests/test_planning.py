@@ -404,3 +404,128 @@ def test_rejection_skips_planning(tmp_path, monkeypatch, capsys, isolated_llm, p
     assert rejected["status"] == "rejected"
     assert isolated_llm.responses.parse.call_count == 1
     assert not (run.RUNS_DIR / paused["run_id"] / "plan.json").exists()
+
+
+def shared_plan(plan_payload):
+    bad = copy.deepcopy(plan_payload)
+    path = bad["tasks"][1]["expected_artifacts"][0]
+    bad["tasks"][2]["expected_artifacts"] = [path]
+    good = copy.deepcopy(bad)
+    good["shared_artifacts"] = [
+        {
+            "path": path,
+            "task_ids": ["T1", "T2"],
+            "justification": "T1 scaffolds storage; T2 integrates after T1.",
+        }
+    ]
+    return bad, good, path
+
+
+@pytest.mark.parametrize("corrections", [1, 2])
+def test_ownership_correction_is_bounded_and_persisted(
+    corrections, tmp_path, monkeypatch, capsys, isolated_llm, payload, design_payload, plan_payload
+):
+    monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
+    bad, good, path = shared_plan(plan_payload)
+    isolated_llm.responses.parse.side_effect = [
+        response(value) for value in [payload, design_payload, *([bad] * corrections), good]
+    ]
+    assert (
+        run.main(
+            [
+                "start",
+                "--requirement",
+                "Build a URL shortener",
+                "--stop-after",
+                "planning",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "planning_complete"
+    assert result["planning_retry_count"] == corrections
+    assert len(result["planning_attempts"]) == corrections + 1
+    artifact = run.RUNS_DIR / result["run_id"] / "planning_attempts.json"
+    assert json.loads(artifact.read_text()) == result["planning_attempts"]
+    assert result["planning_attempts"][0]["candidate"]["shared_artifacts"] == []
+    context = json.loads(isolated_llm.responses.parse.call_args.kwargs["input"][1]["content"])
+    issue = context["correction"]["validation_issues"][0]
+    assert path in issue["message"] and "T1" in issue["message"] and "T2" in issue["message"]
+    assert context["requirements"] == payload and context["design"] == design_payload
+    assert result["plan"]["shared_artifacts"] == good["shared_artifacts"]
+    assert not result["development_results"]
+
+
+def test_ownership_exhaustion_stops_before_development(
+    tmp_path, monkeypatch, capsys, isolated_llm, payload, design_payload, plan_payload
+):
+    monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
+    bad, _, path = shared_plan(plan_payload)
+    isolated_llm.responses.parse.side_effect = [
+        response(value) for value in [payload, design_payload, bad, bad, bad]
+    ]
+    assert run.main(["start", "--requirement", "Build a URL shortener", "--json"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "failed" and result["plan"] is None
+    assert result["planning_retry_count"] == 2 and len(result["planning_attempts"]) == 3
+    assert "budget exhausted" in result["error"] and path in result["error"]
+    assert not result["development_results"] and not result["qa_result"]
+    assert isolated_llm.responses.parse.call_count == 5
+
+
+def test_ownership_correction_restarts_same_checkpoint(
+    tmp_path, monkeypatch, capsys, isolated_llm, payload, design_payload, plan_payload
+):
+    import orchestrator.graph as workflow
+
+    monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
+    bad, good, _ = shared_plan(plan_payload)
+    isolated_llm.responses.parse.side_effect = [
+        response(value) for value in [payload, design_payload, bad, good]
+    ]
+    original = workflow.retry_planning
+
+    def crash(state):
+        raise RuntimeError("Simulated process exit before retry checkpoint")
+
+    monkeypatch.setattr(workflow, "retry_planning", crash)
+    with pytest.raises(RuntimeError):
+        run.main(
+            [
+                "start",
+                "--requirement",
+                "Build a URL shortener",
+                "--stop-after",
+                "planning",
+                "--json",
+            ]
+        )
+    capsys.readouterr()
+    run_id = next(run.RUNS_DIR.iterdir()).name
+    monkeypatch.setattr(workflow, "retry_planning", original)
+    assert run.main(["resume", "--run-id", run_id, "--retry-development", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["run_id"] == run_id and result["status"] == "planning_complete"
+    assert result["planning_retry_count"] == 1
+    assert isolated_llm.responses.parse.call_count == 4  # Requirements and Design are reused.
+
+
+def test_ownership_diagnostics_name_extraneous_and_duplicate_entries(plan_payload, payload):
+    from orchestrator.task_plan import ArtifactOwnershipError
+
+    bad, good, path = shared_plan(plan_payload)
+    good["shared_artifacts"].append(copy.deepcopy(good["shared_artifacts"][0]))
+    with pytest.raises(ArtifactOwnershipError, match="found 2"):
+        validated(good, payload)
+    bad["shared_artifacts"] = [
+        {
+            "path": "workspace/output_code/unused.py",
+            "task_ids": ["T1", "T2"],
+            "justification": "Incorrect path",
+        }
+    ]
+    with pytest.raises(ArtifactOwnershipError) as error:
+        validated(bad, payload)
+    assert "unused.py" in str(error.value) and path in str(error.value)

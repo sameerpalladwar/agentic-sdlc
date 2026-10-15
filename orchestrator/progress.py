@@ -5,6 +5,8 @@ import sys
 import threading
 from typing import TextIO
 
+from orchestrator.redaction import terminal_text
+
 LABELS = {
     "clarification": "Requirements: Waiting for human clarification",
     "development_gate": "Developer: Waiting for retry or rejection",
@@ -15,7 +17,8 @@ LABELS = {
     "design": "Design: Generating architecture",
     "design_validator": "Design: Validating architecture",
     "design_retry": "Design: Correcting validation issues",
-    "planning": "Planning: Creating task DAG",
+    "planning_retry": "Planning: Correcting artifact ownership",
+    "planning": "Planning: Creating implementation task DAG",
     "developer": "Developer: Implementing task",
     "qa": "QA: Running automated tests",
     "review": "Code Review: Checking security and maintainability",
@@ -52,18 +55,26 @@ class ProgressRenderer:
         self.active: dict[str, str] = {}
         self.lock = threading.Lock()
 
-    def render(self, stage: str, status: str, detail: str = "") -> None:
+    def render(
+        self, stage: str, status: str, detail: str = "", *, summary: str | None = None
+    ) -> None:
         """Serialize parallel branch updates and retain one summary per finished stage."""
-        if not self.enabled or stage not in LABELS:
+        if not self.enabled or (stage not in LABELS and status != "failed"):
             return
         with self.lock:
             try:
-                label = LABELS[stage]
+                label = LABELS.get(stage, stage.replace("_", " ").title() + ":")
                 if stage == "human_approval" and status == "completed":
                     label = "Approval: Human decision recorded"
                 if stage == "human_approval" and status == "failed":
                     label = "Approval: Revision or decision check failed"
-                message = label + (f" {detail}" if detail else "")
+                if summary is not None:
+                    label = (
+                        LABELS.get(stage, stage.replace("_", " ").title() + ":").split(":", 1)[0]
+                        + ": "
+                        + summary
+                    )
+                message = terminal_text(label + (f" {detail}" if detail else ""))
                 if self.ansi:
                     self.stream.write("\r\033[2K")
                 if status == "running":
@@ -73,12 +84,12 @@ class ProgressRenderer:
                             message = "Validation: Waiting for QA and Review | " + " | ".join(
                                 self.active.values()
                             )
-                        self.stream.write(f"[running] {message}\n")
+                        self.stream.write(f"[started] {message}\n")
                 else:
                     self.active.pop(stage, None)
                     self.stream.write(f"[{status}] {message}\n")
                 if self.ansi and self.active:
-                    self.stream.write("[running] " + " | ".join(self.active.values()))
+                    self.stream.write("[started] " + " | ".join(self.active.values()))
                 self.stream.flush()
             except (OSError, ValueError):
                 pass  # A closed pipe must not change graph execution or approval state.

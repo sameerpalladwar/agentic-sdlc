@@ -15,6 +15,7 @@ class AcceptanceCriterionResult(BaseModel):
 class QAResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["qa_passed", "qa_failed", "qa_blocked"]
+    command: str | None = None
     exit_code: int | None = None
     total_tests: int = Field(default=0, ge=0)
     passed_tests: int = Field(default=0, ge=0)

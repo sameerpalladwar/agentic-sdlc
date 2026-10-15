@@ -12,9 +12,10 @@ from agents.requirements import ENV_PATH
 from models.design import DesignOutput
 from models.planning import ExecutionPlan
 from models.requirements import RequirementsOutput
+from orchestrator.design_validation import redact
 from orchestrator.scenarios import project_context
 from orchestrator.state import WorkflowState
-from orchestrator.task_plan import validate_execution_plan
+from orchestrator.task_plan import ArtifactOwnershipError, validate_execution_plan
 
 
 def planning_agent(state: WorkflowState) -> dict:
@@ -48,6 +49,12 @@ def planning_agent(state: WorkflowState) -> dict:
         "design": design.model_dump(mode="json"),
     }
     context.update(project_context(state, include_files=False))
+    if state.get("planning_retry_count", 0):
+        context["correction"] = {
+            "invalid_plan": state.get("planning_candidate"),
+            "validation_issues": state.get("planning_validation_issues", []),
+            "instructions": "Correct only the ownership defects; preserve valid design, story coverage and task dependencies. Return a complete plan; do not invent justifications or remove required tasks to evade validation.",
+        }
     try:
         with OpenAI(api_key=api_key, timeout=60.0, max_retries=2) as client:
             response = client.responses.parse(
@@ -77,6 +84,39 @@ def planning_agent(state: WorkflowState) -> dict:
         }
     try:
         plan = validate_execution_plan(plan, requirements)
+    except ArtifactOwnershipError as exc:
+        count = state.get("planning_retry_count", 0)
+        issue = {
+            "code": "invalid_artifact_ownership",
+            "field": "shared_artifacts",
+            "message": str(exc),
+        }
+        attempt = redact(
+            {
+                "attempt": count + 1,
+                "candidate": plan.model_dump(mode="json"),
+                "issues": [issue],
+                "outcome": "invalid",
+            }
+        )
+        return {
+            **failure,
+            "status": "planning_invalid" if count < 2 else "failed",
+            "error": ("Planning correction budget exhausted. " if count >= 2 else "") + str(exc),
+            "planning_candidate": attempt["candidate"],
+            "planning_validation_issues": [issue],
+            "planning_attempts": [*state.get("planning_attempts", []), attempt],
+        }
     except ValueError as exc:
         return {**failure, "error": "Plan validation failed: " + str(exc)}
-    return {"plan": plan.model_dump(mode="json"), "status": "planning_complete", "error": None}
+    return {
+        "plan": plan.model_dump(mode="json"),
+        "status": "planning_complete",
+        "error": None,
+        "planning_candidate": None,
+        "planning_validation_issues": [],
+        "planning_attempts": [
+            *state.get("planning_attempts", []),
+            {"attempt": state.get("planning_retry_count", 0) + 1, "outcome": "valid", "issues": []},
+        ],
+    }

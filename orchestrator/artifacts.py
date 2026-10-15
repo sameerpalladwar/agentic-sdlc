@@ -31,6 +31,8 @@ REPORT_FIELDS = (
     "final_manifest",
 )
 LIST_FIELDS = (
+    "planning_attempts",
+    "planning_validation_issues",
     "project_input_history",
     "clarifications",
     "development_issues",
@@ -43,6 +45,7 @@ ARTIFACTS = {
     "requirements": "requirements.json",
     "design": "design.json",
     "plan": "plan.json",
+    "planning_attempts": "planning_attempts.json",
     "development_results": "development_results.json",
     "qa_results": "qa_results.json",
     "review_result": "review_results.json",
@@ -64,6 +67,7 @@ def make_report(result: dict, run_id: str) -> dict:
         **{field: result.get(field, []) for field in LIST_FIELDS},
         "qa_repair_count": result.get("qa_repair_count", 0),
         "human_change_count": result.get("human_change_count", 0),
+        "planning_retry_count": result.get("planning_retry_count", 0),
         "design_retry_count": result.get("design_retry_count", 0),
         "design_max_retries": result.get("design_max_retries", 2),
     }

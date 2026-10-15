@@ -125,6 +125,8 @@ def test_graph_topology():
         ("design_retry", "design"),
         ("design_safe_stop", "__end__"),
         ("planning", "__end__"),
+        ("planning", "planning_retry"),
+        ("planning_retry", "planning"),
         ("planning", "development_prepare"),
         ("development_prepare", "development_select"),
         ("development_prepare", "__end__"),

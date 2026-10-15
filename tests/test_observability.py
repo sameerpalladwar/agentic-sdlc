@@ -89,7 +89,7 @@ def test_progress_plain_and_parallel_formatting():
     progress.render("review", "completed")
     progress.close()
     text = stream.getvalue()
-    assert "\033" not in text and "[running] QA:" in text
+    assert "\033" not in text and "[started] QA:" in text
     assert "[completed] Code Review:" in text
 
 
