@@ -508,7 +508,15 @@ run directory, separate from this harness's requirements.txt.
 
 Generated MVP applications target Python 3.12; the harness may use a different
 Python version. The Developer prompt and static validator share a fixed FastAPI
-profile in `orchestrator/dependencies.py`. Validation rejects pip entries for
+profile in `orchestrator/dependencies.py`. When the approved design selects FastAPI and
+a task produces requirements.txt, the harness deterministically adds omitted baseline
+pins before validation and persistence. This avoids manual retries for omitted Starlette,
+Pydantic, httpx or httpcore pins. Supplied pins are recorded in the task's
+`dependency_adjustments`, warnings and managed receipt. Existing declarations/comments and
+additional dependencies are preserved. Explicit conflicting versions are rejected rather
+than overwritten; no files outside the task's declared artifacts are added or changed.
+Other project stacks are unaffected. This does not install dependencies, authorize QA,
+or approve delivery. Validation rejects pip entries for
 standard-library modules, non-exact or conflicting pins, missing imported packages,
 and unsupported runtime documentation. Issues appear in task results or
 `development_issues` and prevent development completion. This is a static policy,
@@ -547,15 +555,31 @@ findings route through `validation_gate -> repair_begin -> developer_repair ->
 validation_snapshot`, followed by fresh parallel QA and Review.
 The same run ID and managed workspace are retained. At most two repairs are
 attempted over the lifetime of the run; running QA again does not reset this budget.
+
+One deterministic compatibility exception prevents manual pauses for obsolete TestClient
+keywords. When actual pytest output reports `TestClient.<method>()` rejecting `allow_redirects`
+and identifies the failing test file/line, the harness can rename that keyword to
+`follow_redirects` on a proven FastAPI/Starlette TestClient binding. The boolean value,
+assertions, comments and other code are preserved; AST equivalence is checked. Ambiguous
+bindings, nonliteral values, existing `follow_redirects`, `**kwargs`, missing evidence and
+other test defects are not automatically changed.
+
+This uses one existing repair attempt, the safe writer and replay journal, and records
+`repair_kind: testclient_keyword_compatibility` plus changed paths in recovery history.
+A new revision reruns BOTH QA and Review before approval. Authorization, dependency validation,
+the two-repair limit and final human approval remain mandatory. No extra LLM call generates
+the compatibility patch. LLM-generated test edits, skipped tests and changed expectations
+remain prohibited; other test edits still need explicit human approval.
+
 Each repair receives approved requirements/design, current files, exact failing
 test names and captured tracebacks, and prior attempts. No dependencies are installed.
 The execution authorization covers QA reruns after these targeted source repairs.
 
-Only existing source cited by tracebacks or directly imported by failing tests
-is eligible. Tests, pytest settings, dependencies, and unrelated files are excluded.
-Existing validation guards must remain structurally unchanged. A fix that needs
-test changes or guard changes stops for explicit human review; there is no automatic
-test-edit approval path. These conservative static checks cannot prove semantic
+For LLM repairs, only existing source cited by tracebacks or directly imported by failing
+tests is eligible. Tests, pytest settings, dependencies, and unrelated files are excluded.
+Existing validation guards must remain structurally unchanged. Outside the deterministic
+keyword exception above, test or guard changes stop for explicit human review; the LLM
+cannot grant itself permission to edit tests. These conservative static checks cannot prove semantic
 security or correctness of model-generated repairs. Local execution remains trusted
 and unsandboxed; review is still required before final approval.
 

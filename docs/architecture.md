@@ -76,8 +76,10 @@ python run.py decide --run-id <run_id> --revision <revision> --decision reject
 These three `decide` commands are alternatives for a pending approval. Human-requested changes
 produce a new revision and require fresh QA, Review and approval. They do not reset the two
 automatic-repair budget. Automatic repairs require actionable evidence and local execution
-authorization; blocked execution and configuration errors are not blindly retried. Test edits
-and weakened security checks are not allowed through the automatic repair path.
+authorization; blocked execution and configuration errors are not blindly retried. LLM test
+edits and weakened security checks remain prohibited. The sole automatic test change is the
+[evidence-bound TestClient keyword compatibility repair](../README.md#developerqa-correction),
+which preserves test expectations and reruns both validation branches within the same budget.
 
 ## State, evidence and delivery
 

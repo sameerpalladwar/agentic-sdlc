@@ -17,6 +17,26 @@ FASTAPI_PINS = {
 }
 
 
+def complete_fastapi_profile(content: str) -> tuple[str, list[str]]:
+    """Supply missing baseline pins without changing existing declarations or comments.
+
+    This assembles an already-reviewed profile, not an LLM-based dependency repair.
+    Conflicting pins, malformed lines, duplicates and extra imports still need validation.
+    """
+    declared = {
+        re.split(r"[<>=!~;\s\[]", line.strip())[0].lower().replace("_", "-")
+        for line in content.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    additions = [
+        f"{name}=={version}" for name, version in FASTAPI_PINS.items() if name not in declared
+    ]
+    if not additions:
+        return content, []
+    separator = "" if not content or content.endswith("\n") else "\n"
+    return content + separator + "\n".join(additions) + "\n", additions
+
+
 def validate_dependencies(files: dict[str, str], *, final: bool = False) -> list[dict]:
     """Return deterministic package/runtime issues from source text without installing or
     importing it.

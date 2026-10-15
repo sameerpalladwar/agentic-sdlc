@@ -1,4 +1,4 @@
-"""Bounded, checkpointed repairs of application source; tests are immutable."""
+"""Bounded source repairs and a single evidence-bound TestClient compatibility exception."""
 
 import ast
 import hashlib
@@ -8,10 +8,12 @@ from collections import Counter
 from pathlib import PurePosixPath
 
 from agents.developer import generate_task
+from models.developer import DeveloperOutput
 from orchestrator.dependencies import validate_dependencies
 from orchestrator.design_validation import redact
 from orchestrator.development import development_inputs
 from orchestrator.file_writer import SafeWorkspace
+from orchestrator.testclient_compat import compatibility_changes
 
 MAX_REPAIRS = 2
 
@@ -144,54 +146,60 @@ def repair_developer(state: dict) -> dict:
         requirements, design, plan = development_inputs(state)
         with SafeWorkspace(state["run_id"]) as workspace:
             files = workspace.snapshot()
-            allowed = allowed_sources(files, state["qa_feedback"])
-            if not allowed:
-                raise ValueError(
-                    "No affected application source identified; test changes require human approval."
-                )
-            context = {
-                "mode": "human_repair" if human else "qa_repair",
-                "requirements": requirements.model_dump(),
-                "design": design.model_dump(),
-                "plan": plan.model_dump(),
-                "existing_files": files,
-                "allowed_repair_paths": sorted(allowed),
-                "qa_feedback": state["qa_feedback"],
-                "review_findings": state["qa_feedback"].get("review_findings", []),
-                "validation_revision": state.get("validation_revision"),
-                "prior_repairs": [
-                    h
-                    for h in state.get("recovery_history", [])
-                    if h.get("stage") in {"developer_repair", "human_repair"}
-                ],
-                "task_id": f"human-repair-{count}" if human else f"qa-repair-{count}",
-            }
-            fingerprint = hashlib.sha256(
-                json.dumps(
-                    {"feedback": state["qa_feedback"], "attempt": count}, sort_keys=True
-                ).encode()
-            ).hexdigest()
-            output = workspace.receipt(context["task_id"], fingerprint)
-            if output is None:
-                output = generate_task(context)
-                if (
-                    output.task_id != context["task_id"]
-                    or output.completion_status != "completed"
-                    or not output.files
-                ):
-                    raise ValueError("Repair returned invalid task result.")
-                if not {f.path for f in output.files} <= allowed:
+            output = (
+                None if human else repair_testclient(workspace, files, state["qa_feedback"], count)
+            )
+            if output is not None:
+                event["repair_kind"] = "testclient_keyword_compatibility"
+            else:
+                allowed = allowed_sources(files, state["qa_feedback"])
+                if not allowed:
                     raise ValueError(
-                        "Repair attempted an unrelated file or test change; human approval required."
+                        "No affected application source identified; test changes require human approval."
                     )
-                if all(files[f.path] == f.content for f in output.files):
-                    raise ValueError("Repair made no source changes.")
-                for file in output.files:
-                    preserve_guards(files[file.path], file.content)
-                candidate = {**files, **{f.path: f.content for f in output.files}}
-                if validate_dependencies(candidate, final=True):
-                    raise ValueError("Repair failed dependency validation.")
-                workspace.persist(output, fingerprint)
+                context = {
+                    "mode": "human_repair" if human else "qa_repair",
+                    "requirements": requirements.model_dump(),
+                    "design": design.model_dump(),
+                    "plan": plan.model_dump(),
+                    "existing_files": files,
+                    "allowed_repair_paths": sorted(allowed),
+                    "qa_feedback": state["qa_feedback"],
+                    "review_findings": state["qa_feedback"].get("review_findings", []),
+                    "validation_revision": state.get("validation_revision"),
+                    "prior_repairs": [
+                        h
+                        for h in state.get("recovery_history", [])
+                        if h.get("stage") in {"developer_repair", "human_repair"}
+                    ],
+                    "task_id": f"human-repair-{count}" if human else f"qa-repair-{count}",
+                }
+                fingerprint = hashlib.sha256(
+                    json.dumps(
+                        {"feedback": state["qa_feedback"], "attempt": count}, sort_keys=True
+                    ).encode()
+                ).hexdigest()
+                output = workspace.receipt(context["task_id"], fingerprint)
+                if output is None:
+                    output = generate_task(context)
+                    if (
+                        output.task_id != context["task_id"]
+                        or output.completion_status != "completed"
+                        or not output.files
+                    ):
+                        raise ValueError("Repair returned invalid task result.")
+                    if not {f.path for f in output.files} <= allowed:
+                        raise ValueError(
+                            "Repair attempted an unrelated file or test change; human approval required."
+                        )
+                    if all(files[f.path] == f.content for f in output.files):
+                        raise ValueError("Repair made no source changes.")
+                    for file in output.files:
+                        preserve_guards(files[file.path], file.content)
+                    candidate = {**files, **{f.path: f.content for f in output.files}}
+                    if validate_dependencies(candidate, final=True):
+                        raise ValueError("Repair failed dependency validation.")
+                    workspace.persist(output, fingerprint)
             event.update(
                 outcome="applied",
                 changed_files=[f.path for f in output.files],
@@ -222,3 +230,42 @@ def repair_developer(state: dict) -> dict:
         "qa_repair_applied": status == "development_complete",
         "recovery_history": [*state.get("recovery_history", []), redact(event)],
     }
+
+
+def repair_testclient(
+    workspace: SafeWorkspace, files: dict[str, str], feedback: dict, count: int
+) -> DeveloperOutput | None:
+    """Use the existing receipt journal and repair budget; never broaden LLM test permissions."""
+    task_id = f"qa-testclient-compatibility-{count}"
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {"feedback": feedback, "attempt": count, "policy": "testclient-keyword-v1"},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    pending = workspace.manifest.get("pending") or {}
+    if task_id in workspace.manifest.get("receipts", {}) or pending.get("task_id") == task_id:
+        return workspace.receipt(task_id, fingerprint)
+    # Do not consume or reject another source repair's unfinished journal while probing this policy.
+    changes = compatibility_changes(files, feedback)
+    if not changes:
+        return None
+    candidate = {**files, **{file.path: file.content for file in changes}}
+    if validate_dependencies(candidate, final=True):
+        raise ValueError("Repair failed dependency validation.")
+    output = DeveloperOutput(
+        task_id=task_id,
+        files=changes,
+        implementation_summary="Deterministically replaced evidence-cited TestClient allow_redirects keywords with follow_redirects; assertions and argument values preserved.",
+        acceptance_check_mapping=[
+            {
+                "check": "Preserve test behavior while correcting the TestClient API keyword",
+                "implementation": "AST equivalence verified except for cited keyword names; QA and Review must rerun.",
+            }
+        ],
+        assumptions=[],
+        warnings=["Compatibility change is not evidence that tests passed."],
+        completion_status="completed",
+    )
+    workspace.persist(output, fingerprint)
+    return output

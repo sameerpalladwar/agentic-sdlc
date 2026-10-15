@@ -10,7 +10,7 @@ from models.design import DesignOutput
 from models.developer import DeveloperOutput
 from models.planning import ExecutionPlan
 from models.requirements import RequirementsOutput
-from orchestrator.dependencies import validate_dependencies
+from orchestrator.dependencies import FASTAPI_PINS, complete_fastapi_profile, validate_dependencies
 from orchestrator.file_writer import SafeWorkspace
 from orchestrator.scenarios import project_context
 from orchestrator.state import WorkflowState
@@ -213,6 +213,9 @@ def developer_agent(state: WorkflowState) -> dict:
             "task": task.model_dump(),
         }
         context.update(project_context(state, include_files=False))
+        fastapi_design = any("fastapi" in item.name.lower() for item in design.technology_stack)
+        if fastapi_design:
+            context["dependency_profile"] = FASTAPI_PINS
         # Fingerprint stable inputs, excluding evolving task statuses and file contents.
         fingerprint = hashlib.sha256(
             json.dumps(
@@ -241,6 +244,22 @@ def developer_agent(state: WorkflowState) -> dict:
                     )
                 if [m.check for m in output.acceptance_check_mapping] != task.acceptance_checks:
                     raise ValueError("Developer output must map every acceptance check in order.")
+                # Edit only a manifest already assigned to this task, before validation/persistence.
+                # Add omitted reviewed pins; never replace conflicting declarations or invent versions.
+                if fastapi_design:
+                    output = output.model_copy(deep=True)
+                    adjustments = []
+                    for file in output.files:
+                        if file.path.endswith("/requirements.txt"):
+                            file.content, additions = complete_fastapi_profile(file.content)
+                            if additions:
+                                adjustments.append({"path": file.path, "added_pins": additions})
+                    if adjustments:
+                        output.warnings.append(
+                            "The harness supplied missing reviewed FastAPI baseline pins; dependency validation and QA still apply."
+                        )
+                        record["dependency_adjustments"] = adjustments
+                        record["result"] = output.model_dump()
                 candidate = {**workspace.snapshot(), **{f.path: f.content for f in output.files}}
                 final_task = all(
                     other.task_id == task.task_id or other.status == "completed"

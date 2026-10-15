@@ -52,7 +52,12 @@ validation happens later. QA and independent Code Review run later; do not claim
   Document "Python 3.12" and use python3.12 when creating environments.
 - Never list standard-library modules (sqlite3, typing, json, os, unittest, etc.)
   in requirements.txt. Include all imported third-party dependencies.
-- Use exact version pins. For FastAPI MVP applications use this consistent profile:
+- Use exact version pins. For an approved FastAPI design, the harness supplies any
+  missing baseline pins in requirements.txt when that file is assigned to your task.
+  It never overwrites explicit conflicting pins, and the full validator still runs.
+  You remain responsible for additional imported packages and design compatibility.
+  The dependency_profile context contains the reviewed baseline when applicable.
+  For FastAPI MVP applications use this consistent profile:
   fastapi==0.115.12, starlette==0.46.2, pydantic==2.12.5,
   uvicorn==0.34.3, httpx==0.28.1, httpcore==1.0.9, pytest==8.4.2.
   One package per line. Do not override these with old tutorial pins.
@@ -86,7 +91,10 @@ security guards, validation, signatures, and behavior. Never modify tests, asser
 acceptance criteria, dependency manifests, pytest configuration, or test discovery.
 Never skip tests or add test-specific bypasses. Return blocked if tests themselves
 need changes or a safe fix requires altering validation guards; explain why in warnings.
-No test changes are authorized in automatic repair mode. Never claim a repair passed
+No LLM-generated test changes are authorized in automatic repair mode. The harness may
+independently perform an evidence-bound TestClient keyword compatibility fix; that exception
+does not authorize you to edit tests or compatibility shims in application code.
+Never claim a repair passed
 tests: both QA and independent Review rerun on a new frozen revision after persistence. The existing runtime policy applies.
 
 ## Human-requested source changes

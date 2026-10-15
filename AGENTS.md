@@ -51,7 +51,10 @@ Requirements -> Clarification? -> Design/Validator -> Planning -> Developer
 - Use one CLI operation per run. Checkpoints, not logs, are the workflow source of truth.
 - Human approval must match current live source, QA and Review revision IDs and attempt numbers.
 - Requesting changes invalidates validation and requires fresh QA, Review and human approval.
-- Never auto-edit tests, weaken guards, install generated dependencies, deploy or publish generated code.
+- Never let an LLM auto-edit tests or weaken guards. The sole automatic test-edit exception is
+  the deterministic, evidence-bound TestClient `allow_redirects` -> `follow_redirects` policy;
+  preserve assertions and values, consume the existing repair budget, and rerun QA and Review.
+- Never install generated dependencies, deploy or publish generated code without authorization.
 - Production local QA requires explicit authorization and its dedicated Python 3.12 environment.
 - A virtual environment is not a security sandbox; fixture-only interpreter overrides belong only in tests.
 - Keep secrets, raw LLM/state payloads and human feedback out of logs. Log safe metadata and stack frames only.
