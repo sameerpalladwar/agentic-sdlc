@@ -4,6 +4,7 @@ LangGraph harness for an agentic software development lifecycle workflow.
 Stage 1 converts natural-language requirements into structured user stories using OpenAI.
 Stage 2 pauses ambiguous runs for human clarification and resumes from persistent checkpoints.
 Stage 3 optionally converts completed requirements into a reviewable technical design.
+Stage 4 optionally converts that design into a validated development task plan.
 
 ## Architecture Overview
 
@@ -106,6 +107,7 @@ python run.py --requirement "Build a URL shortener service" --through design
 ```
 
 `--through` defaults to `requirements`, preserving Stage 1 and Stage 2 behavior.
+`--stop-after` is an alias for `--through`; both accept `requirements`, `design`, or `planning`.
 It is stored in the checkpoint. If a design-enabled run pauses, answer it with
 the usual resume command; no need to re-enter requirements or repeat the option:
 
@@ -145,6 +147,82 @@ stores both the stage choice and design state with the original thread ID.
 Completed requirements-only runs cannot be upgraded using `resume`; start a new
 design-enabled run instead. Runs paused before Stage 3 remain requirements-only.
 
+## Planning Agent
+
+Run the URL shortener through planning:
+
+```bash
+python run.py start --through planning --requirement "Build a URL shortener using FastAPI and SQLite with endpoints to create short URLs and redirect visitors"
+# Equivalent option, also supported with the legacy --requirement shorthand:
+python run.py --requirement "Build a URL shortener service" --stop-after planning
+```
+
+The final stage is saved in the checkpoint. A paused planning-enabled run resumes
+with the existing `resume --run-id ... --answers ...` command, without repeating
+requirements, design, or the stage option. Planning uses `RequirementsOutput` and
+`DesignOutput` already in state. It does not regenerate the design. Completed
+requirements-only or design-only runs cannot be extended with `resume`; start a
+new run with the desired final stage.
+
+`prompts/planning.md` describes task decomposition, prerequisites, acceptance
+checks, and artifact ownership. `models/planning.py` defines `ImplementationTask`
+and `ExecutionPlan`. A task has an ID, title, description, related story IDs,
+dependency task IDs, expected file artifacts, acceptance checks, and status.
+Lifecycle statuses are `pending`, `ready`, `in_progress`, `completed`, `blocked`,
+and `failed`. Since this stage executes nothing, initial model claims of task
+completion are discarded; Python sets root tasks to `ready` and dependent tasks
+to `blocked` until their prerequisites complete.
+
+`orchestrator/task_plan.py` validates unique task IDs, existing and non-repeated
+prerequisites, no self-dependencies or cycles, known story IDs, coverage of all
+non-`wont` stories, and exclusion of `wont` scope. Acceptance checks must be
+nonempty. File paths must be normalized under `workspace/output_code/`. Each
+file has one task owner unless `shared_artifacts` explicitly names every owner
+and provides a nonempty justification. Such justification is reviewable text;
+its technical adequacy still needs human review.
+
+A stable Kahn topological sort uses only Python's standard library. It returns
+`ordered_task_ids` and sorts the task list accordingly. `ready_task_ids` and
+`blocked_task_ids` reflect dependency completion, not position in the list.
+Independent roots can be ready together. LangGraph's workflow and the plan's
+execution DAG are separate: LangGraph runs agents; it does not run these tasks.
+
+A minimal illustrative plan for a single story looks like:
+
+```json
+{
+  "tasks": [{
+    "task_id": "TASK-001",
+    "title": "Implement URL mapping storage",
+    "description": "Persist short codes and original URLs in SQLite.",
+    "related_user_story_ids": ["US-001"],
+    "dependencies": [],
+    "expected_artifacts": ["workspace/output_code/app/storage.py"],
+    "acceptance_checks": ["A stored short code retrieves its original URL."],
+    "status": "ready"
+  }],
+  "shared_artifacts": [],
+  "ordered_task_ids": ["TASK-001"],
+  "ready_task_ids": ["TASK-001"],
+  "blocked_task_ids": []
+}
+```
+
+For planning-enabled runs, clear requirements route through
+`requirements -> design -> planning -> END` and finish as `planning_complete`.
+Ambiguity pauses before design; failed requirements/design and rejection never
+reach planning. The Planning Agent independently checks input schemas, completed
+design status, and the clarification flag. Planning errors end as `failed` with
+`plan: null`, while preserving requirements and design. Invalid plans are rejected
+without automatically retrying or running any tasks.
+
+A successful run adds `plan.json` beside `requirements.json`, `design.json`,
+`status.json`, and `checkpoints.sqlite` in `workspace/runs/<run_id>/`. The report
+and checkpoint include `plan`. Failed, paused, or rejected planning-enabled runs
+do not create a plan artifact. These files remain ignored by Git. Planned artifact
+paths are metadata only: Stage 4 writes no application files and executes no code
+or generated shell commands. There is no Developer Agent yet.
+
 ## Test
 
 ```bash
@@ -157,6 +235,8 @@ prompt loading, conditional graph transitions, CLI JSON, rejection, repeated
 clarification, and SQLite checkpoint persistence across processes. Design tests
 cover schema and traceability validation, successful generation, missing or
 ineligible requirements, LLM errors, and clarification resume through design.
+Planning tests cover DAG validation, ordering/readiness, ownership, story coverage,
+safe failures, artifact persistence, and clarification resume through planning.
 
-Requirements and Design Agents are implemented. The architecture diagram illustrates
+Requirements, Design, and Planning Agents are implemented. The architecture diagram illustrates
 the broader planned workflow; no Developer Agent or application code generation is implemented.

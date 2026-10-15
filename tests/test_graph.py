@@ -95,6 +95,7 @@ def test_graph_topology():
     assert {(edge.source, edge.target) for edge in graph.edges} == {
         ("__start__", "requirements"), ("requirements", "__end__"),
         ("requirements", "design"), ("design", "__end__"),
+        ("design", "planning"), ("planning", "__end__"),
         ("requirements", "pause"), ("pause", "clarification"),
         ("clarification", "requirements"), ("clarification", "__end__"),
     }

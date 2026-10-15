@@ -30,7 +30,7 @@ def execute(args: argparse.Namespace) -> dict:
         run_dir.mkdir(parents=True, exist_ok=False)
     elif not (run_dir / "checkpoints.sqlite").is_file():
         raise ValueError("Unknown run: no persistent checkpoint found.")
-    for name in ("checkpoints.sqlite", "requirements.json", "design.json", "status.json"):
+    for name in ("checkpoints.sqlite", "requirements.json", "design.json", "plan.json", "status.json"):
         if (run_dir / name).is_symlink():
             raise ValueError("Run artifacts must not be symlinks.")
 
@@ -50,7 +50,8 @@ def execute(args: argparse.Namespace) -> dict:
         report = {"run_id": run_id, "thread_id": run_id, "status": result["status"],
                   "requirements": result.get("requirements"), "error": result.get("error"),
                   "clarifications": result.get("clarifications", []),
-                  "through": result.get("through", "requirements"), "design": result.get("design")}
+                  "through": result.get("through", "requirements"), "design": result.get("design"),
+                  "plan": result.get("plan")}
         if result.get("__interrupt__"):
             report["status"] = "paused"
             report["open_questions"] = result["__interrupt__"][0].value["open_questions"]
@@ -61,6 +62,9 @@ def execute(args: argparse.Namespace) -> dict:
     if report["design"] is not None or (run_dir / "design.json").exists():
         (run_dir / "design.json").write_text(
             json.dumps(report["design"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if report["plan"] is not None or (run_dir / "plan.json").exists():
+        (run_dir / "plan.json").write_text(
+            json.dumps(report["plan"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     (run_dir / "status.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
 
@@ -70,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     start = commands.add_parser("start", help="Start a new persistent run")
     start.add_argument("--requirement", required=True)
-    start.add_argument("--through", choices=["requirements", "design"], default="requirements",
+    start.add_argument("--through", "--stop-after", choices=["requirements", "design", "planning"], default="requirements",
                        help="Final stage to execute (persisted for resume)")
     resume = commands.add_parser("resume", help="Answer questions or reject a paused run")
     resume.add_argument("--run-id", required=True)

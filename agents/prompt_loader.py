@@ -4,6 +4,7 @@ from pathlib import Path
 REQUIREMENTS_PROMPT = Path(__file__).resolve().parents[1] / "prompts" / "requirements.md"
 
 DESIGN_PROMPT = REQUIREMENTS_PROMPT.with_name("design.md")
+PLANNING_PROMPT = REQUIREMENTS_PROMPT.with_name("planning.md")
 
 
 def load_prompt(path: Path = REQUIREMENTS_PROMPT) -> str:

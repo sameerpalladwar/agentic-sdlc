@@ -13,21 +13,6 @@ from orchestrator.graph import build_graph
 import run
 
 
-@pytest.fixture
-def design_payload():
-    return {
-        "architecture_summary": "A FastAPI service stores URL mappings in SQLite.",
-        "technology_stack": [{"name": name, "purpose": purpose, "rationale": "Simple MVP default"}
-                             for name, purpose in [("FastAPI", "HTTP API"), ("SQLite", "Persistence"), ("pytest", "Tests")]],
-        "components": [{"name": "URL API", "responsibilities": ["Validate and shorten URLs"], "dependencies": ["URL repository"]}],
-        "api_endpoints": [{"method": "POST", "path": "/urls", "request": "JSON url: valid HTTP URL",
-                           "response": "201 JSON short_url: string", "errors": ["422 invalid URL"]}],
-        "data_models": [{"name": "URLMapping", "fields": [{"name": "code", "type": "text", "constraints": "unique primary key"}], "relationships": []}],
-        "non_functional_design": [], "implementation_plan": ["Implement API and persistence", "Add pytest acceptance tests"],
-        "assumptions": ["FastAPI, SQLite and pytest are defaults"], "risks": ["SQLite write concurrency is limited"],
-        "story_traceability": [{"story_id": "US-001", "design_elements": ["URL API POST /urls"],
-                                "acceptance_criteria_coverage": ["Test valid URL returns short_url"]}],
-    }
 
 
 def response(payload):
