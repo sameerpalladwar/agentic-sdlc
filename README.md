@@ -2,6 +2,10 @@
 
 Minimal LangGraph skeleton for an agentic software development lifecycle workflow.
 
+## Architecture Overview
+
+![Agentic SDLC architecture showing the LangGraph orchestrator, specialized agents, shared state, and generated application](docs/images/architecture.png)
+
 ## Setup
 
 ```bash
