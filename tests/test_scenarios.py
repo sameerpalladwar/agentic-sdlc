@@ -28,7 +28,8 @@ def repository(tmp_path):
 
 
 def cli(capsys, *args):
-    assert run.main([*args, "--json", "--no-progress"]) == 0
+    partial = ["--stop-after", "requirements"] if "--requirement" in args else []
+    assert run.main([*args, *partial, "--json", "--no-progress"]) == 0
     return json.loads(capsys.readouterr().out)
 
 
@@ -322,8 +323,6 @@ def test_scenario_preserves_execution_authorization_and_human_approval(
                 "start",
                 "--requirement",
                 "Build a URL shortener",
-                "--stop-after",
-                "delivery",
                 "--json",
             ]
         )
@@ -363,7 +362,7 @@ def offline_requirements(state):
 
 workflow.requirements_agent = offline_requirements
 run.RUNS_DIR = Path(sys.argv[1])
-raise SystemExit(run.main([*sys.argv[2:], "--json", "--no-progress"]))
+raise SystemExit(run.main([*sys.argv[2:], "--json", "--no-progress", *(["--stop-after", "requirements"] if "start" in sys.argv[2:] else [])]))
 """
 
     def process(*args):

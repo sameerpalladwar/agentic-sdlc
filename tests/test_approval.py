@@ -265,7 +265,11 @@ def test_demo_real_qa_approval_delivery(ready, tmp_path, monkeypatch, capsys):
     )
     pending = capsys.readouterr()
     request = json.loads((root / "approval_request.json").read_text())
-    assert "Approval: use decide" in pending.out and "paused" in pending.out
+    assert (
+        f"python run.py decide --run-id {RUN} --revision {request['revision']} --decision approve"
+        in pending.out
+    )
+    assert "paused" in pending.out
     assert (
         run.main(
             ["decide", "--run-id", RUN, "--revision", request["revision"], "--decision", "approve"]

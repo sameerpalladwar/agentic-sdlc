@@ -7,6 +7,9 @@ import run
 
 
 def call(capsys, arguments):
+    # These Stage 1/2 tests explicitly exercise partial runs under the new full default.
+    if "--requirement" in arguments and not ({"--through", "--stop-after"} & set(arguments)):
+        arguments = [*arguments, "--stop-after", "requirements"]
     code = run.main([*arguments, "--json"])
     captured = capsys.readouterr()
     return code, json.loads(captured.out or captured.err)
@@ -160,7 +163,7 @@ def offline_requirements(state):
 
 workflow.requirements_agent = offline_requirements
 run.RUNS_DIR = Path(sys.argv[1])
-raise SystemExit(run.main([*sys.argv[2:], "--json"]))
+raise SystemExit(run.main([*sys.argv[2:], "--json", *(["--stop-after", "requirements"] if "start" in sys.argv[2:] else [])]))
 """
 
     def process(*args):

@@ -98,6 +98,7 @@ class RunObserver:
     """Own one invocation's append-only handlers and renderer; close them on resume/exit."""
 
     def __init__(self, run_id: str, directory: Path, progress: ProgressRenderer):
+        self.failed_stage: str | None = None
         self.run_id = run_id
         self.directory = directory
         self.progress = progress
@@ -219,6 +220,7 @@ def observe_node(stage: str, function: Callable[[dict], dict]) -> Callable[[dict
             observer.progress.render(stage, "waiting")
             raise
         except BaseException as error:
+            observer.failed_stage = stage
             observer.exception(stage, error)
             observer.progress.render(stage, "failed")
             raise
@@ -233,6 +235,8 @@ def observe_node(stage: str, function: Callable[[dict], dict]) -> Callable[[dict
         if stage == "design" and result.get("design_generation_issues"):
             status = "failed"
         failed = any(word in status for word in ("failed", "blocked", "error", "invalid"))
+        if failed and stage not in {"validation_finish", "design_safe_stop"}:
+            observer.failed_stage = stage
         metadata.update(
             duration_seconds=round(duration, 6),
             status=status,

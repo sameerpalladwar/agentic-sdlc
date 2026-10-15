@@ -5,9 +5,10 @@ input takes precedence over deterministic intent detection; no classification ag
 LLM call is used. Brownfield analysis precedes Requirements, while Greenfield starts directly
 with Requirements.
 
-The supplied image provides an overview of the end-to-end workflow. Use `--stop-after delivery`
-to target the full process; the basic `start --requirement` command defaults to stopping after
-Requirements. Other `--stop-after` values preserve earlier stopping points.
+The supplied image provides an overview of the end-to-end workflow. New `start --requirement`
+runs default to the full process through delivery, equivalent to `--stop-after delivery`.
+Explicit partial `--stop-after` targets preserve earlier stopping points. Human gates and
+local QA authorization still apply; a full target does not guarantee uninterrupted execution.
 
 The image simplifies some implementation details: design validation and blocked outcomes are
 not shown, and repairs freeze a new revision before rerunning both QA and Review. The label
@@ -30,10 +31,10 @@ Developer task failures or budget exhaustion can pause at the existing developme
 Run from the repository root with the harness environment activated:
 
 ```bash
-# Default target: Requirements only.
+# Default target: full workflow through delivery.
 python run.py start --requirement "Build a URL shortener"
 
-# Target the complete workflow, including the human approval gate.
+# Optional explicit full target, including the human approval gate.
 python run.py start --requirement "Build a URL shortener using FastAPI and SQLite" --stop-after delivery
 
 # Brownfield with an existing repository.

@@ -6,6 +6,8 @@ import threading
 from typing import TextIO
 
 LABELS = {
+    "clarification": "Requirements: Waiting for human clarification",
+    "development_gate": "Developer: Waiting for retry or rejection",
     "project_routing": "Project: Determining workflow",
     "project_input": "Project: Waiting for repository or intent clarification",
     "repository_analysis": "Repository Analysis: Inspecting existing application",

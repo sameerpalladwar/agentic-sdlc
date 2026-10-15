@@ -70,11 +70,22 @@ def make_report(result: dict, run_id: str) -> dict:
     if result.get("__interrupt__"):
         report["status"] = "paused"
         report["pause"] = dict(result["__interrupt__"][0].value)
-        if report["pause"].get("kind") in {"repository", "project_intent"}:
+        kind = report["pause"].get("kind")
+        if kind == "approval":
+            prefix = (
+                f"python run.py decide --run-id {run_id} --revision {report['pause']['revision']}"
+            )
+            report["pause"]["resume_command"] = f"{prefix} --decision approve"
+            report["pause"]["cancel_command"] = f"{prefix} --decision reject"
+        else:
             option = (
                 "--repo-path /path/to/application"
-                if report["pause"]["kind"] == "repository"
+                if kind == "repository"
+                else "--retry-development"
+                if kind == "development"
                 else '--answers "Build a new application"'
+                if kind == "project_intent"
+                else '--answers "<answers to the questions above>"'
             )
             report["pause"]["resume_command"] = f"python run.py resume --run-id {run_id} {option}"
             report["pause"]["cancel_command"] = f"python run.py resume --run-id {run_id} --reject"

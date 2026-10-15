@@ -214,12 +214,24 @@ def execute(args: argparse.Namespace) -> dict:
     progress = ProgressRenderer(enabled=not args.no_progress, verbose=args.verbose)
     observer = RunObserver(run_id, directory, progress)
     started = time.monotonic()
+    if progress.enabled and not args.json:
+        print(f"Run {run_id} | Logs: {directory / 'execution.log'}", file=sys.stderr)
     observer.emit("run_started", stage="workflow", command=args.command)
     try:
         config = {"configurable": {"thread_id": run_id}, "recursion_limit": 250}
         with SqliteSaver.from_conn_string(str(directory / "checkpoints.sqlite")) as saver:
             result = invoke_run(build_graph(saver), args, run_id, directory, config, observer)
         report = make_report(result, run_id)
+        if report["status"] in {
+            "failed",
+            "qa_failed",
+            "qa_error",
+            "qa_blocked",
+            "validation_failed",
+            "validation_blocked",
+            "approval_blocked",
+        }:
+            report["failed_stage"] = observer.failed_stage
         save_report(report, directory, observer)
         observer.emit(
             "run_completed",
@@ -281,7 +293,8 @@ def parser() -> argparse.ArgumentParser:
             "validation",
             "delivery",
         ],
-        default="requirements",
+        default="delivery",
+        help="Last stage to execute (default: delivery; human gates remain mandatory)",
     )
     start.add_argument(
         "--development-budget", type=int, choices=range(1, 51), default=20, metavar="1..50"
@@ -343,19 +356,28 @@ def print_summary(report: dict) -> None:
         print(f"Review summary: {request['review_summary']['summary']}")
         for limitation in request["limitations"]:
             print(f"Limitation: {limitation}")
-        print(
-            "Approval: use decide --run-id <id> --revision <revision> --decision approve|request_changes|reject"
-        )
     elif report.get("open_questions"):
         for question in report["open_questions"]:
             print(f"Question: {question}")
-    if report.get("pause", {}).get("kind") in {"repository", "project_intent"}:
-        print(f"Resume: {report['pause']['resume_command']}")
-        print(f"Cancel: {report['pause']['cancel_command']}")
+    if report.get("pause"):
+        pause = report["pause"]
+        print(
+            f"Paused: {pause.get('instructions') or 'Human approval is required for the current revision.'}"
+        )
+        print(f"Resume: {pause['resume_command']}")
+        print(f"Cancel: {pause['cancel_command']}")
     if report.get("error"):
         print(f"Details: {report['error']}")
     directory = RUNS_DIR / report["run_id"]
     print(f"Artifacts: {directory}")
+    if report.get("failed_stage"):
+        print(f"Failed stage: {report['failed_stage']}")
+        print(f"Logs: {directory / 'execution.log'}")
+        print(f"Events: {directory / 'events.jsonl'}")
+    if (report.get("qa_result") or {}).get("status") == "qa_blocked":
+        print(
+            f"After reviewing code and preparing QA dependencies: python run.py qa --run-id {report['run_id']} --authorize-local-execution"
+        )
     if report.get("final_manifest"):
         print(f"Delivered code: {report['final_manifest']['generated_application_path']}")
         print(f"Final manifest: {directory / 'final_manifest.json'}")

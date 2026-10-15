@@ -38,6 +38,30 @@ take precedence. Use a model that supports structured outputs; the example uses
 python run.py start --requirement "Build a URL shortener service"
 ```
 
+New runs automatically target the full applicable workflow: Project Routing (and Brownfield
+Repository Analysis when needed) → Requirements → Design → Planning → Developer → parallel
+QA/Code Review → Validation → Human Approval → Final Delivery. Clarification and approval
+remain mandatory checkpoints; no human answers or approvals are automatic.
+
+QA still requires explicit local execution authorization and a prepared Python 3.12 QA
+environment. A fresh run can therefore stop at `validation_blocked` after code generation.
+After reviewing the generated code and dependencies and preparing the QA environment, use:
+
+```bash
+python run.py qa --run-id <run_id> --authorize-local-execution
+python run.py decide --run-id <run_id> --revision <current_revision> --decision approve
+```
+
+Only approve a pending request after inspecting it. The CLI prints exact commands containing
+the current run and revision IDs. Local execution is not sandboxed. To run Requirements only,
+use `python run.py start --requirement "Build a URL shortener" --stop-after requirements`.
+Existing checkpoints retain their original target, including older Requirements-only runs;
+this default change applies to new starts. A completed partial run is not a paused full run.
+
+Each invocation displays the run ID and log path, then stage start/completion or waiting status.
+Paused runs display the reason, questions or approval request, and resume/cancel commands.
+Failures identify the stage and point to `workspace/runs/<run_id>/execution.log` and `events.jsonl`.
+
 The CLI prints a concise summary by default. Add `--json` for the full report with
 `run_id`, `thread_id`, `status`, `requirements`, and clarification history. Each start creates a unique run ID that remains the
 LangGraph thread ID throughout the run. The Stage 1 `--requirement` shorthand still works.
@@ -90,8 +114,8 @@ Blocking ambiguity produces targeted questions rather than invented requirements
 The graph starts with `pending` and stores validated data in
 `state["requirements"]`. Routing after the requirements node is conditional:
 
-- `requirements_complete` goes to `END` by default, or to the Design Agent when
-  the run was started with `--through design`.
+- `requirements_complete` continues to Design by default. It goes to `END` only
+  when the run explicitly targets `--stop-after requirements`.
 - `needs_human_clarification` goes through a pause node, which persists `paused`,
   and then a clarification node calls LangGraph `interrupt()` with the open questions.
 - `Command(resume={"answers": ...})` continues the clarification node, records the
@@ -103,7 +127,7 @@ The graph starts with `pending` and stores validated data in
 
 ## Design Agent
 
-Opt in to execute through design:
+To stop after technical design:
 
 ```bash
 python run.py start --through design --requirement "Build a URL shortener with create and redirect endpoints using FastAPI and SQLite"
@@ -115,8 +139,9 @@ The existing shorthand also works:
 python run.py --requirement "Build a URL shortener service" --through design
 ```
 
-`--through` defaults to `requirements`, preserving Stage 1 and Stage 2 behavior.
-`--stop-after` is an alias for `--through`; both accept `requirements`, `design`, `planning`, `development`, or `qa`.
+`--through` defaults to `delivery` for new runs. `--stop-after` is an alias;
+both accept `requirements`, `design`, `planning`, `development`, `qa`, `validation`, or `delivery`.
+Explicit partial targets stop at the selected stage.
 It is stored in the checkpoint. If a design-enabled run pauses, answer it with
 the usual resume command; no need to re-enter requirements or repeat the option:
 
@@ -757,10 +782,10 @@ for a human answer. The Requirements Agent still handles blocking functional amb
 both modes. Scenario Markdown files are documentation and acceptance examples, not runtime inputs.
 
 ```bash
-# Greenfield; existing default stops after requirements.
+# Greenfield; default target is the full workflow through delivery.
 python run.py start --requirement "Build a URL shortener using FastAPI and SQLite"
 
-# Full workflow through the mandatory human approval gate.
+# Explicit full target (equivalent to the default).
 python run.py start --requirement "Build a URL shortener using FastAPI and SQLite" --stop-after delivery
 
 # Brownfield: analyze a read-only source snapshot before Requirements.

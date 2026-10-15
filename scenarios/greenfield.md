@@ -5,6 +5,6 @@ python run.py start --requirement "Build a URL shortener using FastAPI and SQLit
 ```
 
 Expected: automatically select Greenfield and invoke Requirements without Repository Analysis.
-With `--stop-after delivery`, reuse Design, Planning, Developer, parallel QA/Review, Validation,
+By default, continue through Design, Planning, Developer, parallel QA/Review, Validation,
 Human Approval and Delivery. Local QA and human gates require explicit authorization.
 This file is documentation, not runtime configuration.

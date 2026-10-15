@@ -256,7 +256,19 @@ def test_design_failure_preserves_requirements(
 def test_requirements_only_never_calls_design(tmp_path, monkeypatch, capsys, isolated_llm, payload):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
     isolated_llm.responses.parse.return_value = response(payload)
-    assert run.main(["--json", "start", "--requirement", "Build a URL shortener"]) == 0
+    assert (
+        run.main(
+            [
+                "--json",
+                "start",
+                "--requirement",
+                "Build a URL shortener",
+                "--stop-after",
+                "requirements",
+            ]
+        )
+        == 0
+    )
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "requirements_complete"
     assert report["through"] == "requirements"
