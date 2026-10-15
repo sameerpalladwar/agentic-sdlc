@@ -14,7 +14,7 @@ logs, structured events and concise terminal progress.
 
 ## Architecture Overview
 
-See the [end-to-end Mermaid process flow](docs/architecture.md) for automatic routing,
+See the [end-to-end process-flow diagram](docs/architecture.md) for automatic routing,
 human pause/resume, parallel QA and Review, recovery, and final delivery.
 
 ![Agentic SDLC architecture showing the LangGraph orchestrator, specialized agents, shared state, and generated application](docs/images/architecture.png)
