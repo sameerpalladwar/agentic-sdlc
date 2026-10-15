@@ -105,7 +105,16 @@ def test_failure_clears_stale_requirements():
 def test_graph_topology():
     graph = build_graph().get_graph()
     assert {(edge.source, edge.target) for edge in graph.edges} == {
-        ("__start__", "requirements"),
+        ("__start__", "project_routing"),
+        ("project_routing", "requirements"),
+        ("project_routing", "repository_analysis"),
+        ("project_routing", "project_input"),
+        ("project_routing", "__end__"),
+        ("project_input", "project_routing"),
+        ("project_input", "__end__"),
+        ("repository_analysis", "project_input"),
+        ("repository_analysis", "requirements"),
+        ("repository_analysis", "__end__"),
         ("requirements", "__end__"),
         ("requirements", "design"),
         ("design", "design_validator"),

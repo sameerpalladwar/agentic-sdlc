@@ -8,6 +8,7 @@ class WorkflowState(TypedDict):
     requirements: NotRequired[dict | None]
     status: Literal[
         "pending",
+        "awaiting_project_input",
         "requirements_complete",
         "needs_human_clarification",
         "failed",
@@ -77,3 +78,12 @@ class WorkflowState(TypedDict):
     human_change_count: NotRequired[int]
     final_manifest: NotRequired[dict | None]
     run_directory: NotRequired[str]
+
+    automatic_routing: NotRequired[bool]
+    project_mode: NotRequired[Literal["greenfield", "brownfield"] | None]
+    project_questions: NotRequired[list[str]]
+    project_input_kind: NotRequired[str | None]
+    project_input_history: NotRequired[list[dict]]
+    repository_path: NotRequired[str]
+    repository_analysis: NotRequired[dict | None]
+    repository_files: NotRequired[dict[str, str]]

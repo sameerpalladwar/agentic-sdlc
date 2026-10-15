@@ -6,6 +6,9 @@ import threading
 from typing import TextIO
 
 LABELS = {
+    "project_routing": "Project: Determining workflow",
+    "project_input": "Project: Waiting for repository or intent clarification",
+    "repository_analysis": "Repository Analysis: Inspecting existing application",
     "requirements": "Requirements: Generating user stories",
     "design": "Design: Generating architecture",
     "design_validator": "Design: Validating architecture",

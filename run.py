@@ -31,6 +31,7 @@ VALIDATION_STATUSES = {
     "validation_blocked",
 }
 REPLAY_STATUSES = VALIDATION_STATUSES | {
+    "planning_complete",  # Replay a pending preparation/baseline-copy checkpoint safely.
     "developing",
     "repairing",
     "validating",
@@ -49,6 +50,8 @@ def run_directory(args: argparse.Namespace) -> tuple[str, Path]:
     if args.command == "start":
         if not args.requirement.strip():
             raise ValueError("Requirement must not be empty.")
+        if args.repo_path is not None and not args.repo_path.strip():
+            raise ValueError("Repository path must not be empty.")
         directory.mkdir(parents=True, exist_ok=False)
     elif not (directory / "checkpoints.sqlite").is_file():
         raise ValueError("Unknown run: no persistent checkpoint found.")
@@ -105,8 +108,24 @@ def resume_input(args: argparse.Namespace, snapshot):
         )
     if snapshot.values.get("status") == "awaiting_approval":
         raise ValueError("Use decide --revision --decision for the pending human approval.")
+    if args.repo_path is not None and not args.repo_path.strip():
+        raise ValueError("Repository path must not be empty.")
     if args.answers is not None and not args.answers.strip():
         raise ValueError("Answers must not be empty.")
+    if snapshot.values.get("status") == "awaiting_project_input":
+        if args.retry_development:
+            raise ValueError("Supply --repo-path, --answers, or --reject for project input.")
+        return Command(
+            resume=(
+                {"reject": True}
+                if args.reject
+                else {"repository_path": args.repo_path}
+                if args.repo_path
+                else {"answers": args.answers}
+            )
+        )
+    if args.repo_path:
+        raise ValueError("--repo-path requires a run paused for project input.")
     development = snapshot.values.get("status") == "development_paused"
     if development and not (args.retry_development or args.reject):
         raise ValueError("Use --retry-development or --reject for a development pause.")
@@ -141,6 +160,12 @@ def invoke_run(
                 "design_retry_count": 0,
                 "design_max_retries": 2,
                 "recovery_history": [],
+                "automatic_routing": True,
+                **(
+                    {"repository_path": str(Path(args.repo_path).expanduser().absolute())}
+                    if args.repo_path
+                    else {}
+                ),
             },
             config,
         )
@@ -261,12 +286,14 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument(
         "--development-budget", type=int, choices=range(1, 51), default=20, metavar="1..50"
     )
+    start.add_argument("--repo-path", help="Read-only existing application repository")
     resume = commands.add_parser(
         "resume", parents=[options], help="Resume clarification or pending checkpoint work"
     )
     resume.add_argument("--run-id", required=True)
     choice = resume.add_mutually_exclusive_group(required=True)
     choice.add_argument("--answers")
+    choice.add_argument("--repo-path", help="Supply or correct the repository for this paused run")
     choice.add_argument("--retry-development", action="store_true")
     choice.add_argument("--reject", action="store_true")
     qa = commands.add_parser(
@@ -322,6 +349,9 @@ def print_summary(report: dict) -> None:
     elif report.get("open_questions"):
         for question in report["open_questions"]:
             print(f"Question: {question}")
+    if report.get("pause", {}).get("kind") in {"repository", "project_intent"}:
+        print(f"Resume: {report['pause']['resume_command']}")
+        print(f"Cancel: {report['pause']['cancel_command']}")
     if report.get("error"):
         print(f"Details: {report['error']}")
     directory = RUNS_DIR / report["run_id"]
@@ -339,7 +369,10 @@ def main(argv: list[str] | None = None) -> int:
         index += 1
     if index < len(arguments) and arguments[index] == "--requirement":
         arguments.insert(index, "start")
-    args = parser().parse_args(arguments)
+    cli = parser()
+    if index == len(arguments):
+        cli.error('Provide start --requirement "..."; project routing is automatic.')
+    args = cli.parse_args(arguments)
     for name in ("json", "verbose", "no_progress"):
         if not hasattr(args, name):
             setattr(args, name, False)

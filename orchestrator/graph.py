@@ -7,6 +7,7 @@ from langgraph.types import interrupt
 from agents.design import design_agent
 from agents.planning import planning_agent
 from agents.qa import qa_validation_branch
+from agents.repository_analysis import repository_analysis_agent
 from agents.requirements import requirements_agent
 from agents.reviewer import reviewer_agent
 from orchestrator.approval import approval_prepare, final_delivery, human_approval, human_repair
@@ -25,6 +26,7 @@ from orchestrator.development import (
 from orchestrator.observability import observe_node
 from orchestrator.qa_recovery import begin_repair, repair_developer
 from orchestrator.revision import validation_snapshot
+from orchestrator.scenarios import after_project, project_input, route_project
 from orchestrator.state import WorkflowState
 from orchestrator.validation import finish_validation, route_combined, validation_gate
 
@@ -212,7 +214,33 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     )
     graph.add_node("pause", observe_node("pause", mark_paused))
     graph.add_node("clarification", observe_node("clarification", clarify))
-    graph.add_edge(START, "requirements")
+    graph.add_node(
+        "repository_analysis", observe_node("repository_analysis", repository_analysis_agent)
+    )
+    graph.add_node("project_routing", observe_node("project_routing", route_project))
+    graph.add_node("project_input", observe_node("project_input", project_input))
+    graph.add_edge(START, "project_routing")
+    graph.add_conditional_edges(
+        "project_routing",
+        after_project,
+        ["project_input", "repository_analysis", "requirements", END],
+    )
+    graph.add_conditional_edges(
+        "project_input",
+        lambda s: END if s["status"] == "rejected" else "project_routing",
+        [END, "project_routing"],
+    )
+    graph.add_conditional_edges(
+        "repository_analysis",
+        lambda s: (
+            "project_input"
+            if s["status"] == "awaiting_project_input"
+            else "requirements"
+            if s["status"] == "pending"
+            else END
+        ),
+        ["project_input", "requirements", END],
+    )
     graph.add_conditional_edges("requirements", route_requirements, ["pause", "design", END])
     graph.add_edge("pause", "clarification")
     graph.add_conditional_edges("clarification", route_clarification, ["requirements", END])

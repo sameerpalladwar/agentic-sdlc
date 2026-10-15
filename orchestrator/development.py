@@ -7,10 +7,12 @@ from langgraph.types import interrupt
 
 from agents.developer import generate_task
 from models.design import DesignOutput
+from models.developer import DeveloperOutput
 from models.planning import ExecutionPlan
 from models.requirements import RequirementsOutput
 from orchestrator.dependencies import validate_dependencies
 from orchestrator.file_writer import SafeWorkspace
+from orchestrator.scenarios import project_context
 from orchestrator.state import WorkflowState
 from orchestrator.task_plan import calculate_readiness, validate_execution_plan
 
@@ -44,6 +46,8 @@ def prepare_development(state: WorkflowState) -> dict:
         budget = state.get("development_budget", 20)
         if not 1 <= budget <= 50:
             raise ValueError("Development budget must be between 1 and 50.")
+        if state.get("project_mode") == "brownfield":
+            seed_repository(state)
         return {
             "status": "developing",
             "development_results": [],
@@ -51,7 +55,7 @@ def prepare_development(state: WorkflowState) -> dict:
             "active_task": None,
             "error": None,
         }
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OSError, SyntaxError):
         return {
             "status": "failed",
             "error": "Development requires a valid completed plan, design, and clear requirements.",
@@ -133,6 +137,7 @@ def developer_agent(state: WorkflowState) -> dict:
             "plan": plan.model_dump(),
             "task": task.model_dump(),
         }
+        context.update(project_context(state, include_files=False))
         # Fingerprint stable inputs, excluding evolving task statuses and file contents.
         fingerprint = hashlib.sha256(
             json.dumps(
@@ -227,3 +232,29 @@ def development_gate(state: WorkflowState) -> dict:
                 }
             task.status = "pending"
     return {"plan": plan.model_dump(), "status": "developing", "development_used": 0, "error": None}
+
+
+def seed_repository(state: WorkflowState) -> None:
+    """Copy only the analyzed snapshot into managed run output; never write to its original root."""
+    files = state.get("repository_files", {})
+    fingerprint = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    if not files or fingerprint != (state.get("repository_analysis") or {}).get("revision"):
+        raise ValueError("Brownfield source snapshot is missing or changed.")
+    with SafeWorkspace(state["run_id"]) as workspace:
+        if workspace.receipt("repository-baseline", fingerprint) is not None:
+            return
+        output = DeveloperOutput(
+            task_id="repository-baseline",
+            files=[{"path": path, "content": content} for path, content in files.items()],
+            implementation_summary="Copy read-only repository baseline into this run's output workspace.",
+            acceptance_check_mapping=[
+                {
+                    "check": "Preserve analyzed source",
+                    "implementation": "Managed snapshot copy; no source execution.",
+                }
+            ],
+            assumptions=[],
+            warnings=["Baseline code has not been executed or approved for local QA."],
+            completion_status="completed",
+        )
+        workspace.persist(output, fingerprint)

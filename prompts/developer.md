@@ -88,3 +88,8 @@ qa_feedback.human_feedback. Only edit allowed_repair_paths. Keep approved design
 security guards, acceptance criteria, and tests intact; return blocked if the feedback
 requires a requirements/design change or test edit. Implement one targeted response,
 never claim it passed. Both validation branches and a fresh human approval follow.
+
+In Brownfield mode, existing_files is the managed copy of the analyzed repository.
+Enhance it in place within this run's output workspace only. Preserve unrelated
+files and behavior; do not regenerate the application or modify the original repo.
+Use current existing_files as authoritative when later tasks change baseline code.

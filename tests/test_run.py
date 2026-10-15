@@ -21,7 +21,7 @@ def runs(tmp_path, monkeypatch):
 def test_start_saves_json(capsys, llm_response, payload, clarification):
     if clarification:
         payload.update(requires_human_clarification=True, open_questions=["Which users?"])
-    code, report = call(capsys, ["start", "--requirement", "Shorten URLs"])
+    code, report = call(capsys, ["start", "--requirement", "Build a URL shortener"])
     assert code == 0
     assert report["status"] == ("paused" if clarification else "requirements_complete")
     assert report["thread_id"] == report["run_id"]
@@ -129,13 +129,13 @@ def test_save_failure(tmp_path, monkeypatch, capsys, llm_response):
     blocked = tmp_path / "file"
     blocked.write_text("existing")
     monkeypatch.setattr(run, "RUNS_DIR", blocked)
-    code, report = call(capsys, ["start", "--requirement", "Shorten URLs"])
+    code, report = call(capsys, ["start", "--requirement", "Build a URL shortener"])
     assert code == 1
     assert "Unable to save" in report["error"]
 
 
 def test_legacy_cli(capsys, llm_response):
-    code, report = call(capsys, ["--requirement", "Shorten URLs"])
+    code, report = call(capsys, ["--requirement", "Build a URL shortener"])
     assert code == 0
     assert report["status"] == "requirements_complete"
 
@@ -172,7 +172,7 @@ raise SystemExit(run.main([*sys.argv[2:], "--json"]))
         )
         return json.loads(completed.stdout)
 
-    clear = process("start", "--requirement", "Shorten URLs")
+    clear = process("start", "--requirement", "Build a URL shortener")
     assert clear["status"] == "requirements_complete"
     paused = process("start", "--requirement", "Build an app")
     assert paused["status"] == "paused"

@@ -19,6 +19,7 @@ from agents.requirements import ENV_PATH
 from models.design import DesignOutput
 from models.design_validation import issue
 from models.requirements import RequirementsOutput
+from orchestrator.scenarios import project_context
 from orchestrator.state import WorkflowState
 
 
@@ -85,6 +86,7 @@ def design_agent(state: WorkflowState) -> dict:
         "original_requirement": state["requirement"],
         "clarifications": state.get("clarifications", []),
     }
+    context.update(project_context(state))
     if state.get("design_retry_count", 0):
         from orchestrator.design_validation import redact
 

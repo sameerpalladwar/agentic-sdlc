@@ -206,7 +206,10 @@ def test_recovery_artifacts_and_checkpoint(
         response(good),
     ]
     assert (
-        run.main(["--json", "start", "--through", "design", "--requirement", "Shorten URLs"]) == 0
+        run.main(
+            ["--json", "start", "--through", "design", "--requirement", "Build a URL shortener"]
+        )
+        == 0
     )
     report = json.loads(capsys.readouterr().out)
     directory = run.RUNS_DIR / report["run_id"]

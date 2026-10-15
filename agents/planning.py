@@ -12,6 +12,7 @@ from agents.requirements import ENV_PATH
 from models.design import DesignOutput
 from models.planning import ExecutionPlan
 from models.requirements import RequirementsOutput
+from orchestrator.scenarios import project_context
 from orchestrator.state import WorkflowState
 from orchestrator.task_plan import validate_execution_plan
 
@@ -46,6 +47,7 @@ def planning_agent(state: WorkflowState) -> dict:
         "requirements": requirements.model_dump(mode="json"),
         "design": design.model_dump(mode="json"),
     }
+    context.update(project_context(state, include_files=False))
     try:
         with OpenAI(api_key=api_key, timeout=60.0, max_retries=2) as client:
             response = client.responses.parse(

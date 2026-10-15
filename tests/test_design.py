@@ -142,7 +142,10 @@ def test_clear_through_design(tmp_path, monkeypatch, capsys, isolated_llm, paylo
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
     isolated_llm.responses.parse.side_effect = [response(payload), response(design_payload)]
     assert (
-        run.main(["--json", "start", "--through", "design", "--requirement", "Shorten URLs"]) == 0
+        run.main(
+            ["--json", "start", "--through", "design", "--requirement", "Build a URL shortener"]
+        )
+        == 0
     )
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "design_complete"
@@ -235,7 +238,10 @@ def test_design_failure_preserves_requirements(
         response({}),
     ]
     assert (
-        run.main(["--json", "start", "--through", "design", "--requirement", "Shorten URLs"]) == 1
+        run.main(
+            ["--json", "start", "--through", "design", "--requirement", "Build a URL shortener"]
+        )
+        == 1
     )
     failed = json.loads(capsys.readouterr().out)
     assert failed["status"] == "failed"
@@ -250,7 +256,7 @@ def test_design_failure_preserves_requirements(
 def test_requirements_only_never_calls_design(tmp_path, monkeypatch, capsys, isolated_llm, payload):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
     isolated_llm.responses.parse.return_value = response(payload)
-    assert run.main(["--json", "start", "--requirement", "Shorten URLs"]) == 0
+    assert run.main(["--json", "start", "--requirement", "Build a URL shortener"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "requirements_complete"
     assert report["through"] == "requirements"

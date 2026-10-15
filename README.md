@@ -14,6 +14,9 @@ logs, structured events and concise terminal progress.
 
 ## Architecture Overview
 
+See the [end-to-end Mermaid process flow](docs/architecture.md) for automatic routing,
+human pause/resume, parallel QA and Review, recovery, and final delivery.
+
 ![Agentic SDLC architecture showing the LangGraph orchestrator, specialized agents, shared state, and generated application](docs/images/architecture.png)
 
 ## Setup
@@ -744,3 +747,65 @@ Troubleshooting:
 Local execution remains trusted and unsandboxed. LLM review and static guard checks are
 fallible. Logs are best-effort observability, not authoritative audit storage, and artifact
 exports occur after invocation checkpoints; keep the entire run directory private.
+
+## Automatic project routing
+
+Supply requirements directly; there is no scenario menu or classification LLM call.
+An explicit repository selects Brownfield. Clear new-application requests select Greenfield.
+Modification requests without a repository pause for its path. Unclear project intent pauses
+for a human answer. The Requirements Agent still handles blocking functional ambiguity in
+both modes. Scenario Markdown files are documentation and acceptance examples, not runtime inputs.
+
+```bash
+# Greenfield; existing default stops after requirements.
+python run.py start --requirement "Build a URL shortener using FastAPI and SQLite"
+
+# Full workflow through the mandatory human approval gate.
+python run.py start --requirement "Build a URL shortener using FastAPI and SQLite" --stop-after delivery
+
+# Brownfield: analyze a read-only source snapshot before Requirements.
+python run.py start --requirement "Add URL expiration to my existing application" --repo-path ./existing-app --stop-after delivery
+
+# Missing repository: pauses without calling the LLM or reading stdin.
+python run.py start --requirement "Add URL expiration to my existing URL shortener"
+python run.py resume --run-id <run_id> --repo-path ./existing-app
+
+# Correct an invalid path using the same command and run ID.
+python run.py resume --run-id <run_id> --repo-path ./corrected-app
+
+# Unclear project intent: answer the question printed by the run.
+python run.py start --requirement "URL links for our team"
+python run.py resume --run-id <run_id> --answers "Build a new application"
+
+# Functional clarification and cancellation retain their existing syntax.
+python run.py resume --run-id <run_id> --answers "Team members create and share short URLs"
+python run.py resume --run-id <run_id> --reject
+```
+
+Replace `<run_id>` with the printed ID. Both terminals and noninteractive processes return
+`paused` with the question and resume command, without waiting on stdin. `--json` includes
+structured pause data. Empty CLI invocation prints usage. The legacy `--requirement` shorthand,
+`start`, `resume`, `qa` and `decide` commands remain supported. Select later stages with
+`--stop-after`; no human gate is automatically answered.
+
+Repository paths must be readable, project-like directories without symlink ancestors.
+Analysis reads at most 100 supported UTF-8 text files and 250 KB. Environments, caches,
+secrets, binaries, databases and symlinks are excluded; credential-like source is rejected.
+This is bounded static analysis, not a full language-aware repository index. Unsupported or
+oversized repositories pause with a correctable error. Original source is never modified:
+development seeds the existing managed `workspace/output_code/<run_id>/` from the frozen
+snapshot and writes there. Analysis is reused after requirements clarification.
+
+`workspace/runs/<run_id>/status.json` and the persistent checkpoint retain original input,
+inferred mode, supplied path, outstanding questions and project-input history. Brownfield
+adds `repository_analysis.json`; existing logs, analytics and downstream artifacts retain
+the same run identity. See [architecture](docs/architecture.md) for routing and recovery.
+
+The existing explicitly authorized local QA boundary, parallel QA/Review, two-repair budget,
+revision-bound human approval and final delivery remain in place. A virtual environment is
+not a security sandbox. Review generated code and dependencies before authorizing execution:
+
+```bash
+python run.py qa --run-id <run_id> --authorize-local-execution --stop-after delivery
+python run.py decide --run-id <run_id> --revision <revision_from_approval_request> --decision approve
+```

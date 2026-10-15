@@ -207,7 +207,12 @@ def test_workflow_and_persistence(
         for r in [payload, design_payload, plan, fixture["development_results"][0]["result"]]
     ]
     # Start always blocks without explicit approval, then resume the same checkpoint.
-    assert run.main(["--json", "start", "--stop-after", "qa", "--requirement", "Shorten URLs"]) == 3
+    assert (
+        run.main(
+            ["--json", "start", "--stop-after", "qa", "--requirement", "Build a URL shortener"]
+        )
+        == 3
+    )
     report = json.loads(capsys.readouterr().out)
     run_id = report["run_id"]
     assert report["status"] == "validation_blocked"

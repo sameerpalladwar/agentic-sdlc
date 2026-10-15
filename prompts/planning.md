@@ -61,3 +61,8 @@ that task's expected_artifacts and justify shared ownership when necessary.
 Assign final README and dependency updates so the run command, test command,
 actual modules, Python runtime, and installed packages agree. Do not leave these
 integration steps implicit or owned only by an initial scaffold task.
+
+For Brownfield mode, plan targeted enhancements to the existing analyzed files.
+The harness copies the safe repository baseline into the run's output workspace
+before development. Declare all files each task must change, preserve unrelated
+behavior, and plan tests for both existing behavior and requested enhancements.

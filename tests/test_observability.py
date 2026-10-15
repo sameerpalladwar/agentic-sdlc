@@ -119,7 +119,7 @@ def test_cli_default_is_compact_and_verbose_is_safe(tmp_path, monkeypatch, capsy
     import run
 
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
-    assert run.main(["--verbose", "--requirement", "Shorten URLs"]) == 0
+    assert run.main(["--verbose", "--requirement", "Build a URL shortener"]) == 0
     captured = capsys.readouterr()
     assert captured.out.startswith("Run ") and "Artifacts:" in captured.out
     assert "user_stories" not in captured.out
@@ -158,7 +158,7 @@ def test_logging_unavailable_still_completes(tmp_path, monkeypatch, capsys, llm_
         "SafeFileHandler",
         lambda *a, **k: (_ for _ in ()).throw(OSError("No logging storage")),
     )
-    assert run.main(["--requirement", "Shorten URLs", "--json"]) == 0
+    assert run.main(["--requirement", "Build a URL shortener", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "requirements_complete"
 

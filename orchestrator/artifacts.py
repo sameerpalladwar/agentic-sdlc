@@ -8,6 +8,12 @@ from orchestrator.file_writer import atomic_write
 from orchestrator.observability import RunObserver
 
 REPORT_FIELDS = (
+    "requirement",
+    "repository_path",
+    "project_questions",
+    "project_input_kind",
+    "project_mode",
+    "repository_analysis",
     "requirements",
     "error",
     "design",
@@ -25,6 +31,7 @@ REPORT_FIELDS = (
     "final_manifest",
 )
 LIST_FIELDS = (
+    "project_input_history",
     "clarifications",
     "development_issues",
     "design_validation_issues",
@@ -32,6 +39,7 @@ LIST_FIELDS = (
     "approval_history",
 )
 ARTIFACTS = {
+    "repository_analysis": "repository_analysis.json",
     "requirements": "requirements.json",
     "design": "design.json",
     "plan": "plan.json",
@@ -61,7 +69,15 @@ def make_report(result: dict, run_id: str) -> dict:
     }
     if result.get("__interrupt__"):
         report["status"] = "paused"
-        report["pause"] = result["__interrupt__"][0].value
+        report["pause"] = dict(result["__interrupt__"][0].value)
+        if report["pause"].get("kind") in {"repository", "project_intent"}:
+            option = (
+                "--repo-path /path/to/application"
+                if report["pause"]["kind"] == "repository"
+                else '--answers "Build a new application"'
+            )
+            report["pause"]["resume_command"] = f"python run.py resume --run-id {run_id} {option}"
+            report["pause"]["cancel_command"] = f"python run.py resume --run-id {run_id} --reject"
         if "open_questions" in report["pause"]:
             report["open_questions"] = report["pause"]["open_questions"]
     return report

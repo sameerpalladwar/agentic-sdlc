@@ -256,7 +256,16 @@ def test_start_through_planning(
         response(plan_payload),
     ]
     assert (
-        run.main(["--json", "start", "--stop-after", "planning", "--requirement", "Shorten URLs"])
+        run.main(
+            [
+                "--json",
+                "start",
+                "--stop-after",
+                "planning",
+                "--requirement",
+                "Build a URL shortener",
+            ]
+        )
         == 0
     )
     result = json.loads(capsys.readouterr().out)
@@ -306,7 +315,9 @@ def test_design_failure_skips_planning(tmp_path, monkeypatch, capsys, isolated_l
         response(None),
         response(None),
     ]
-    assert run.main(["--json", "--requirement", "Shorten URLs", "--through", "planning"]) == 1
+    assert (
+        run.main(["--json", "--requirement", "Build a URL shortener", "--through", "planning"]) == 1
+    )
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "failed"
     assert result["plan"] is None
@@ -364,7 +375,10 @@ def test_cyclic_cli_failure_preserves_inputs(
         response(plan_payload),
     ]
     assert (
-        run.main(["--json", "start", "--through", "planning", "--requirement", "Shorten URLs"]) == 1
+        run.main(
+            ["--json", "start", "--through", "planning", "--requirement", "Build a URL shortener"]
+        )
+        == 1
     )
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "failed"

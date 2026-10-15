@@ -276,7 +276,14 @@ def test_partial_failure_resume(
     ]
     assert (
         run.main(
-            ["--json", "start", "--stop-after", "development", "--requirement", "Shorten URLs"]
+            [
+                "--json",
+                "start",
+                "--stop-after",
+                "development",
+                "--requirement",
+                "Build a URL shortener",
+            ]
         )
         == 0
     )
@@ -315,7 +322,7 @@ def test_budget_resume(capsys, isolated_llm, payload, design_payload, developer_
                 "--development-budget",
                 "1",
                 "--requirement",
-                "Shorten URLs",
+                "Build a URL shortener",
             ]
         )
         == 0
@@ -375,7 +382,16 @@ def test_checkpoint_replay_uses_receipt(
         response(output(developer_plan["tasks"][1])),
     ]
     with pytest.raises(KeyboardInterrupt):
-        run.main(["--json", "start", "--through", "development", "--requirement", "Shorten URLs"])
+        run.main(
+            [
+                "--json",
+                "start",
+                "--through",
+                "development",
+                "--requirement",
+                "Build a URL shortener",
+            ]
+        )
     capsys.readouterr()
     run_id = next(run.RUNS_DIR.iterdir()).name
     assert run.main(["--json", "resume", "--run-id", run_id, "--retry-development"]) == 0
@@ -392,7 +408,16 @@ def test_retry_limit(capsys, isolated_llm, payload, design_payload, developer_pl
         response(None),
     ]
     assert (
-        run.main(["--json", "start", "--through", "development", "--requirement", "Shorten URLs"])
+        run.main(
+            [
+                "--json",
+                "start",
+                "--through",
+                "development",
+                "--requirement",
+                "Build a URL shortener",
+            ]
+        )
         == 0
     )
     report = json.loads(capsys.readouterr().out)
@@ -417,7 +442,16 @@ def test_development_rejection(capsys, isolated_llm, payload, design_payload, de
         response(None),
     ]
     assert (
-        run.main(["--json", "start", "--through", "development", "--requirement", "Shorten URLs"])
+        run.main(
+            [
+                "--json",
+                "start",
+                "--through",
+                "development",
+                "--requirement",
+                "Build a URL shortener",
+            ]
+        )
         == 0
     )
     paused = json.loads(capsys.readouterr().out)
