@@ -14,7 +14,7 @@ from orchestrator.dependencies import validate_dependencies
 from orchestrator.file_writer import SafeWorkspace
 from orchestrator.scenarios import project_context
 from orchestrator.state import WorkflowState
-from orchestrator.task_plan import calculate_readiness, validate_execution_plan
+from orchestrator.task_plan import InvalidPlanError, calculate_readiness, validate_execution_plan
 
 MAX_TASK_ATTEMPTS = 3
 
@@ -25,9 +25,11 @@ def development_inputs(
     requirements = RequirementsOutput.model_validate(state.get("requirements"))
     design = DesignOutput.model_validate(state.get("design"))
     plan = ExecutionPlan.model_validate(state.get("plan"))
-    validate_execution_plan(
-        plan, requirements
-    )  # Validate DAG without resetting persisted lifecycle state.
+    try:
+        # The validator resets only its returned copy; retain persisted lifecycle statuses.
+        validate_execution_plan(plan, requirements)
+    except ValueError as error:
+        raise InvalidPlanError(str(error)) from error
     if requirements.requires_human_clarification:
         raise ValueError("Requirements still need clarification.")
     return requirements, design, plan
@@ -55,6 +57,8 @@ def prepare_development(state: WorkflowState) -> dict:
             "active_task": None,
             "error": None,
         }
+    except InvalidPlanError as error:
+        return invalid_plan_result(error)
     except (ValueError, TypeError, OSError, SyntaxError):
         return {
             "status": "failed",
@@ -70,6 +74,25 @@ def select_task(state: WorkflowState) -> dict:
         _, _, plan = development_inputs(state)
         with SafeWorkspace(state["run_id"]) as workspace:
             files = workspace.snapshot()
+        missing_artifacts = [
+            {
+                "code": "missing_task_artifact",
+                "task_id": task.task_id,
+                "field": path,
+                "message": f"Task {task.task_id} is completed but its artifact {path} is not persisted.",
+            }
+            for task in plan.tasks
+            if task.status == "completed"
+            for path in task.expected_artifacts
+            if path not in files
+        ]
+        if missing_artifacts:
+            return {
+                "status": "failed",
+                "active_task": None,
+                "development_issues": missing_artifacts,
+                "error": "; ".join(issue["message"] for issue in missing_artifacts),
+            }
         plan.ready_task_ids, plan.blocked_task_ids = calculate_readiness(plan.tasks)
         if all(t.status == "completed" for t in plan.tasks):
             issues = validate_dependencies(files, final=True)
@@ -78,15 +101,19 @@ def select_task(state: WorkflowState) -> dict:
                     "status": "failed",
                     "active_task": None,
                     "development_issues": issues,
-                    "error": "Dependency validation failed; review development_issues before QA.",
+                    "plan": plan.model_dump(),
+                    "error": "All tasks completed, but generated application package/runtime validation failed: "
+                    + "; ".join(issue["message"] for issue in issues),
                 }
             return {
                 "status": "development_complete",
                 "active_task": None,
                 "plan": plan.model_dump(),
+                "development_issues": [],
                 "error": None,
             }
         failed = any(t.status == "failed" for t in plan.tasks)
+        diagnostics = [*state.get("development_issues", []), *task_issues(plan)]
         if (
             failed
             or state.get("development_used", 0) >= state.get("development_budget", 20)
@@ -96,17 +123,65 @@ def select_task(state: WorkflowState) -> dict:
                 "status": "development_paused",
                 "active_task": None,
                 "plan": plan.model_dump(),
-                "error": "Development paused after a task failure, blocked prerequisites, or generation budget exhaustion.",
+                "development_issues": diagnostics,
+                "error": (
+                    "Development paused: " + "; ".join(issue["message"] for issue in diagnostics)
+                    if failed or not plan.ready_task_ids
+                    else f"Development generation budget exhausted ({state.get('development_used', 0)}/{state.get('development_budget', 20)}); ready task IDs: {plan.ready_task_ids}."
+                ),
             }
         task = next(t for t in plan.tasks if t.task_id == plan.ready_task_ids[0])
         task.status = "in_progress"
         plan.ready_task_ids.remove(task.task_id)
-        return {"active_task": task.task_id, "plan": plan.model_dump(), "status": "developing"}
+        return {
+            "active_task": task.task_id,
+            "plan": plan.model_dump(),
+            "status": "developing",
+            "development_issues": [],
+            "error": None,
+        }
+    except InvalidPlanError as error:
+        return invalid_plan_result(error)
     except (ValueError, TypeError, OSError):
         return {
             "status": "failed",
             "error": "Development input or managed workspace validation failed.",
         }
+
+
+def invalid_plan_result(error: InvalidPlanError) -> dict:
+    return {
+        "status": "failed",
+        "active_task": None,
+        "development_issues": [
+            {"code": "invalid_task_plan", "field": "plan", "message": str(error)}
+        ],
+        "error": f"Task plan validation failed before scheduling: {error}",
+    }
+
+
+def task_issues(plan: ExecutionPlan) -> list[dict]:
+    """Keep lifecycle failures distinct from missing third-party package declarations."""
+    statuses = {task.task_id: task.status for task in plan.tasks}
+    issues = []
+    for task in plan.tasks:
+        unmet = [
+            dependency for dependency in task.dependencies if statuses[dependency] != "completed"
+        ]
+        if task.status == "failed" or unmet:
+            dependency_statuses = {dependency: statuses[dependency] for dependency in unmet}
+            issues.append(
+                {
+                    "code": "task_failed" if task.status == "failed" else "unmet_task_dependencies",
+                    "field": "plan.tasks",
+                    "task_id": task.task_id,
+                    "status": task.status,
+                    "unmet_dependency_ids": unmet,
+                    "dependency_statuses": dependency_statuses,
+                    "message": f"Task {task.task_id} status={task.status}; unmet dependencies={dependency_statuses}.",
+                }
+            )
+    return issues
 
 
 def developer_agent(state: WorkflowState) -> dict:
@@ -167,9 +242,20 @@ def developer_agent(state: WorkflowState) -> dict:
                 if [m.check for m in output.acceptance_check_mapping] != task.acceptance_checks:
                     raise ValueError("Developer output must map every acceptance check in order.")
                 candidate = {**workspace.snapshot(), **{f.path: f.content for f in output.files}}
-                issues = validate_dependencies(candidate)
+                final_task = all(
+                    other.task_id == task.task_id or other.status == "completed"
+                    for other in plan.tasks
+                )
+                issues = validate_dependencies(candidate, final=final_task)
                 if issues:
-                    record["issues"] = issues
+                    record["issues"] = [
+                        {
+                            **issue,
+                            "task_id": task.task_id,
+                            "validation_phase": "application_dependencies",
+                        }
+                        for issue in issues
+                    ]
                     raise ValueError("Dependency validation failed.")
                 workspace.persist(output, fingerprint)
             record["generated_files"] = [str(workspace.target(f.path)) for f in output.files]
@@ -200,6 +286,7 @@ def developer_agent(state: WorkflowState) -> dict:
         "plan": plan.model_dump(),
         "development_results": results,
         "development_used": state.get("development_used", 0) + 1,
+        "development_issues": record.get("issues", []),
         "active_task": None,
     }
 

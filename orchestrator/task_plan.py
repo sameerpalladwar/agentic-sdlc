@@ -1,27 +1,37 @@
 """Deterministic plan coverage, ownership, dependency validation, and readiness."""
 
-from collections import deque
+from collections import Counter, deque
 
 from models.planning import ExecutionPlan, ImplementationTask
 from models.requirements import RequirementsOutput
+
+
+class InvalidPlanError(ValueError):
+    """Deterministic plan validation failed before scheduling or generation."""
 
 
 def topological_sort(tasks: list[ImplementationTask]) -> list[str]:
     """Stable Kahn sort; reject invalid edges and cycles without executing tasks."""
     by_id = {task.task_id: task for task in tasks}
     if len(by_id) != len(tasks):
-        raise ValueError("Task IDs must be unique.")
+        raise ValueError(
+            f"Task IDs must be unique; duplicate IDs: {sorted(k for k, n in Counter(t.task_id for t in tasks).items() if n > 1)}."
+        )
     children: dict[str, list[str]] = {task_id: [] for task_id in by_id}
     indegree: dict[str, int] = {}
     for task in tasks:
         if len(task.dependencies) != len(set(task.dependencies)):
-            raise ValueError("Dependencies must not repeat.")
+            raise ValueError(
+                f"Task {task.task_id}: dependencies must not repeat: {task.dependencies}."
+            )
         indegree[task.task_id] = len(task.dependencies)
         for dependency in task.dependencies:
             if dependency == task.task_id:
-                raise ValueError("A task cannot depend on itself.")
+                raise ValueError(f"Task {task.task_id} cannot depend on itself.")
             if dependency not in by_id:
-                raise ValueError("Dependency refers to a missing task.")
+                raise ValueError(
+                    f"Task {task.task_id}: dependency {dependency} refers to a missing task."
+                )
             children[dependency].append(task.task_id)
     ready = deque(task_id for task_id, count in indegree.items() if count == 0)
     ordered: list[str] = []
@@ -33,7 +43,9 @@ def topological_sort(tasks: list[ImplementationTask]) -> list[str]:
             if indegree[child] == 0:
                 ready.append(child)
     if len(ordered) != len(tasks):
-        raise ValueError("Task dependencies contain a cycle.")
+        raise ValueError(
+            f"Task dependencies contain a cycle; unresolved task IDs: {sorted(k for k, n in indegree.items() if n > 0)}."
+        )
     return ordered
 
 

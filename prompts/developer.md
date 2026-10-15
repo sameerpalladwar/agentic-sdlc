@@ -58,6 +58,13 @@ validation happens later. QA and independent Code Review run later; do not claim
   One package per line. Do not override these with old tutorial pins.
   If explicit design requirements conflict with this profile, return blocked with
   an explanation; do not silently override approved requirements.
+- The FastAPI profile is a required baseline, not an exhaustive dependency list.
+  When assigned requirements.txt, inspect imports in every existing source/test file
+  and the approved design. Declare every additional third-party dependency (for
+  example SQLAlchemy when the design uses its ORM) with an exact compatible pin.
+  Standard-library sqlite3 does not supply SQLAlchemy. Do not omit a dependency
+  merely because it is absent from the baseline profile. Use previous_attempts'
+  structured dependency issues to correct the assigned files on an explicit retry.
 - Keep the actual entry point and README command consistent: root main.py means
   `python -m uvicorn main:app`; app/main.py means `python -m uvicorn app.main:app`.
 - Register every generated APIRouter with the FastAPI app. Use the full plan to

@@ -516,6 +516,20 @@ not a universal dependency resolver; review additional packages and use `pip che
 in the dedicated Python 3.12 environment. No application code is imported by
 validation. QA tests still require explicit authorization.
 
+Task-DAG dependencies and application package dependencies are separate checks. DAG errors
+identify duplicate/missing IDs, self-dependencies or cycles before scheduling. Only tasks
+whose prerequisites completed are eligible; completed tasks must have their declared artifacts
+in the managed workspace. Failed prerequisites are reported with IDs and current statuses.
+
+Before the last task's files are persisted or it is marked completed, the candidate application
+receives the full package/runtime check. The FastAPI pins are a baseline: an ORM import such as
+`sqlalchemy` also requires its own reviewed exact dependency pin. An invalid candidate leaves
+prior files intact and records task-specific `development_issues`; the existing development
+pause permits `resume --run-id <run_id> --retry-development` (at most three attempts per task).
+No new automatic Planning or dependency-repair loop is added. A final defensive check remains
+for older checkpoints; all tasks completed does not override missing packages. A failed older
+terminal run must be reviewed and restarted, not treated as a pending interrupt.
+
 ## Developer–QA correction
 
 After combined validation, actionable pytest failures or evidence-backed review
