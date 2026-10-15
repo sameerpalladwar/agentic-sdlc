@@ -125,6 +125,8 @@ class SafeWorkspace:
         return None
 
     def persist(self, output: DeveloperOutput, fingerprint: str) -> list[str]:
+        if self.manifest.get("validation_revision"):
+            raise ValueError("Developer writes are blocked during validation.")
         paths = [file.path for file in output.files]
         if len(paths) != len(set(paths)):
             raise ValueError("Duplicate generated paths.")

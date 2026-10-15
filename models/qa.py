@@ -22,3 +22,6 @@ class QAResult(BaseModel):
     error_summary: str = ""
     test_output: str = ""
     acceptance_criteria_results: list[AcceptanceCriterionResult] = Field(default_factory=list)
+
+    revision: str | None = None
+    retry_attempt: int = Field(default=0, ge=0)

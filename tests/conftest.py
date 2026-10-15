@@ -7,6 +7,7 @@ import agents.requirements as agent
 import agents.design as design
 import agents.planning as planning
 import agents.developer as developer
+import agents.reviewer as reviewer
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +25,8 @@ def isolated_llm(monkeypatch):
     monkeypatch.setattr(planning, "OpenAI", MagicMock(return_value=client))
     monkeypatch.setattr(developer, "load_dotenv", lambda *args: None)
     monkeypatch.setattr(developer, "OpenAI", MagicMock(return_value=client))
+    monkeypatch.setattr(reviewer, "load_dotenv", lambda *args: None)
+    monkeypatch.setattr(reviewer, "OpenAI", MagicMock(return_value=client))
     return client
 
 
@@ -67,3 +70,9 @@ def design_payload():
         "story_traceability": [{"story_id": "US-001", "design_elements": ["URL API POST /urls"],
                                 "acceptance_criteria_coverage": ["Test valid URL returns short_url"]}],
     }
+
+
+def approved_review(context):
+    from models.review import CodeReviewResult
+    return CodeReviewResult(status='approved', summary='Mock independent review', findings=[],
+        blocking_findings_count=0, reviewed_files=list(context['files']), reviewed_revision=context['revision'])

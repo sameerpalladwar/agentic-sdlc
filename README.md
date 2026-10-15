@@ -7,6 +7,8 @@ Stage 3 optionally converts completed requirements into a reviewable technical d
 Stage 4 optionally converts that design into a validated development task plan.
 Stage 5 optionally generates application files one task at a time without executing them.
 Stage 6 runs approved local pytest and records actual test results.
+Stage 7 runs independent Code Review alongside QA on a frozen revision, then joins
+both results at a deterministic Validation Gate with bounded source repair.
 
 ## Architecture Overview
 
@@ -290,7 +292,7 @@ attempt requires a new run after review. Completed runs cannot be resumed.
 No generated code, imports, tests, dependency installation, or model-suggested
 commands are executed by the harness. Acceptance mapping is the LLM's explanation,
 not independent verification. Syntax validation does not establish runtime
-correctness, security, or completeness. During development, QA has not yet run. The Review Agent is not implemented.
+correctness, security, or completeness. During development, QA and Code Review have not yet run; both execute after development completes.
 `pytest.ini` restricts harness test discovery to tests/ so generated tests are
 never collected by a harness pytest run. Pass `tests` explicitly when testing a
 generated app inside this repository. Review the generated code and its README
@@ -326,7 +328,7 @@ python run.py --requirement "Build a URL shortener using FastAPI and SQLite with
 ```
 
 Generation does not grant permission to execute code. QA initially returns
-`qa_blocked`. Review the generated application, tests, conftest files, and dependency
+`qa_blocked`, so the combined workflow returns `validation_blocked`. Review the generated application, tests, conftest files, and dependency
 list. Prepare a dedicated per-run environment yourself, then authorize execution:
 
 ```bash
@@ -361,10 +363,12 @@ timeouts cannot pass. Counts are taken from the final summary, not an LLM.
 
 There is no test-to-criterion mapping in this MVP: every acceptance criterion is
 `not_verified`, even when the suite passes. `qa_passed` describes the test suite
-only; business acceptance, review, and final approval remain pending. The QA node
+only; independent review also has to approve before validation passes. Business
+acceptance and final human approval remain pending. The QA node
 runs after completed development, preserving existing clarification, recovery,
 and checkpoint routing. It never marks the entire SDLC completed. CLI exit codes
-are 0 for qa_passed, 1 for qa_failed, and 3 for qa_blocked.
+are 0 for validation_passed, 1 for validation_failed, and 3 for validation_blocked.
+Per-branch qa_passed/qa_failed/qa_blocked remain in qa_results.json.
 
 ## Design correction and safe recovery (Stage 6.5)
 
@@ -460,8 +464,8 @@ safe failures, artifact persistence, and clarification resume through planning.
 Developer tests cover persistence, unsafe paths, dependency transitions, failure/retry,
 budgets, journal recovery, and checkpoint replay without executing generated code.
 
-Requirements, Design, Planning, Developer, and QA Agents are implemented. The
-Review Agent and final approval stages remain future work.
+Requirements, Design, Planning, Developer, QA, and independent Review Agents are
+implemented. Final human approval remains a future stage.
 
 For Python 3.12 generated apps, the developer prompt requires the fixed dependency
 profile below, all imported packages, and explicit router
@@ -484,8 +488,9 @@ validation. QA tests still require explicit authorization.
 
 ## Developer–QA correction
 
-After explicitly authorized QA, an exit-code-1 pytest failure with named failing
-tests routes through `qa_assess -> repair_begin -> developer_repair -> qa`.
+After combined validation, actionable pytest failures or evidence-backed review
+findings route through `validation_gate -> repair_begin -> developer_repair ->
+validation_snapshot`, followed by fresh parallel QA and Review.
 The same run ID and managed workspace are retained. At most two repairs are
 attempted over the lifetime of the run; running QA again does not reset this budget.
 Each repair receives approved requirements/design, current files, exact failing
@@ -500,7 +505,7 @@ test-edit approval path. These conservative static checks cannot prove semantic
 security or correctness of model-generated repairs. Local execution remains trusted
 and unsandboxed; review is still required before final approval.
 
-`qa_passed` ends this MVP through QA without final human approval. Missing execution
+`validation_passed` ends this MVP through QA and Review without final human approval. Missing execution
 approval, collection/configuration errors, timeout, rejected repairs, or exhausted
 budget stop safely. `recovery_history.json` and SQLite checkpoints retain QA reports,
 failure categories, repair attempts/changed files, and final outcome. Acceptance
@@ -515,3 +520,73 @@ python run.py resume --run-id <run_id> --retry-development
 Interrupted repairs reuse managed file receipts instead of repeating successful
 writes. QA may execute again after a crash before its checkpoint was saved. The
 source validator is deliberately conservative and is not a general program verifier.
+
+## Stage 7: parallel QA and independent Code Review
+
+```text
+Developer complete -> validation_snapshot -> QA -----------+
+                                        -> Code Review --+-> validation_gate
+validation_gate -> validation_passed -> END (human approval still pending)
+                -> actionable failure -> repair_begin -> Developer repair
+                   -> new snapshot -> BOTH branches again (at most 2 repairs)
+                -> blocked/non-retryable/exhausted -> safe stop
+```
+
+LangGraph's explicit fan-in edge waits for both branches. QA owns `qa_result`;
+Review owns `review_result`. Neither branch writes shared lifecycle or history
+fields. Only the gate sets combined status. The existing `qa_results` state alias
+is retained for callers, and the CLI still accepts `--stop-after qa` and `qa`.
+`--stop-after validation` is an alias for running through the combined milestone.
+
+```bash
+python run.py --requirement "Build a URL shortener using FastAPI and SQLite with POST /shorten, GET /{short_code}, and automated tests." --stop-after validation
+# Review generated code/dependencies; prepare the dedicated Python 3.12 QA venv
+# as described above. Then explicitly authorize local tests:
+python run.py qa --run-id <run_id> --authorize-local-execution
+# Resume pending checkpointed validation/repair after a process interruption:
+python run.py resume --run-id <run_id> --retry-development
+```
+
+Code Review uses the existing OPENAI_API_KEY/OPENAI_MODEL configuration and performs
+a fresh structured LLM call independent of Developer outputs. It receives approved
+requirements/design/plan and managed source, not Developer success claims. Source
+comments and documentation are untrusted data. It does not execute or write code.
+Secret/sensitive paths, caches, environments, databases, and binary content are
+excluded by managed-workspace rules; credential-like source blocks validation.
+
+The snapshot is a content-hashed copy of managed files persisted in SQLite state.
+Both branches consume the same frozen content, revision ID, and retry attempt.
+Managed Developer writes are rejected while validation is active. The gate also
+checks live source hashes and releases the write lock before any repair. This is
+a harness write barrier, not filesystem isolation against other host processes.
+Continue to run only one CLI operation per run.
+
+Deterministic policy:
+- QA passed with actual test counts plus structured Review approved yields
+  `validation_passed`. A summary saying "approved" alone is insufficient.
+- QA failed or Review requests changes/blocking findings yields `validation_failed`.
+- QA blocked, Review blocked/error, invalid evidence, missing results, changed source,
+  or revision/attempt mismatch yields `validation_blocked`.
+- Critical/high findings are blocking regardless of the model's claimed count or
+  approval. Every finding must cite existing frozen code and valid story IDs;
+  optional line numbers must match its excerpt. Review must list every frozen file.
+
+Only actionable, evidence-validated findings and named pytest failures can trigger
+repairs. Source-only path restrictions, security-guard retention, human approval for
+test changes, and the lifetime two-repair budget remain in effect. No-op repairs
+are rejected. New code gets a new content revision and both branches rerun.
+
+Artifacts in `workspace/runs/<run_id>/`:
+- `qa_results.json`: executed pytest result, `revision`, `retry_attempt`.
+- `review_results.json`: structured findings, `reviewed_revision`, `retry_attempt`.
+- `validation_results.json`: combined verdict, revision, attempt, final outcome, and
+  `final_human_approval: false`.
+- `recovery_history.json`: every QA result, review/gate result, and repair outcome.
+- `checkpoints.sqlite`: frozen content and branch checkpoints for durable resume.
+
+Model findings remain fallible: excerpt/path checks do not prove semantic accuracy
+or complete security coverage. Review approval is not human approval. Acceptance
+criteria remain `not_verified` without test-to-story evidence. QA remains explicitly
+authorized local execution with no security sandbox; the approval includes bounded
+QA reruns after targeted source repairs. No generated dependencies are installed
+automatically. A reviewer API/configuration failure blocks combined validation.

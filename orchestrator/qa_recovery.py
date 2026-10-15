@@ -18,7 +18,8 @@ MAX_REPAIRS = 2
 def failure_feedback(report: dict) -> dict:
     output = report.get('test_output', '')
     names = re.findall(r'^FAILED ([^\s]+::[^\s]+)', output, re.M)
-    return {'category': 'test_failure' if report.get('exit_code') == 1 and names else 'execution_error',
+    return {'category': ('none' if report.get('status') == 'qa_passed' else
+                         'test_failure' if report.get('exit_code') == 1 and report.get('failed_tests', 0) > 0 and names else 'execution_error'),
             'failing_tests': names, 'traceback_summary': output[-32768:],
             'error_summary': report.get('error_summary', '')}
 
@@ -31,14 +32,6 @@ def assess_qa(state: dict) -> dict:
     return {'qa_feedback': feedback, 'recovery_history': history}
 
 
-def route_qa(state: dict) -> str:
-    if (state['status'] == 'qa_failed' and state.get('qa_local_authorized') is True
-            and state.get('qa_feedback', {}).get('category') == 'test_failure'
-            and state.get('qa_repair_count', 0) < MAX_REPAIRS):
-        return 'repair_begin'
-    return 'qa_finish'
-
-
 def begin_repair(state: dict) -> dict:
     return {'qa_repair_count': state.get('qa_repair_count', 0) + 1, 'status': 'repairing'}
 
@@ -46,7 +39,9 @@ def begin_repair(state: dict) -> dict:
 def allowed_sources(files: dict[str, str], feedback: dict) -> set[str]:
     """Only existing source named by a traceback or directly imported by failing tests."""
     relative = {str(PurePosixPath(p).relative_to('workspace/output_code')): p for p in files}
-    cited = set(re.findall(r'([A-Za-z0-9_./-]+\.py):\d+', feedback['traceback_summary']))
+    cited = {str(PurePosixPath(f['file_path']).relative_to('workspace/output_code'))
+             for f in feedback.get('review_findings', []) if f.get('file_path') in files}
+    cited.update(re.findall(r'([A-Za-z0-9_./-]+\.py):\d+', feedback['traceback_summary']))
     for name in feedback['failing_tests']:
         test = files.get(relative.get(name.split('::')[0], ''), '')
         for node in ast.walk(ast.parse(test)):
@@ -99,6 +94,8 @@ def repair_developer(state: dict) -> dict:
                        'design': design.model_dump(), 'plan': plan.model_dump(),
                        'existing_files': files, 'allowed_repair_paths': sorted(allowed),
                        'qa_feedback': state['qa_feedback'],
+                       'review_findings': state['qa_feedback'].get('review_findings', []),
+                       'validation_revision':state.get('validation_revision'),
                        'prior_repairs': [h for h in state.get('recovery_history', []) if h.get('stage') == 'developer_repair'],
                        'task_id': f'qa-repair-{count}'}
             fingerprint = hashlib.sha256(json.dumps({'feedback':state['qa_feedback'], 'attempt':count}, sort_keys=True).encode()).hexdigest()
@@ -109,6 +106,8 @@ def repair_developer(state: dict) -> dict:
                     raise ValueError('Repair returned invalid task result.')
                 if not {f.path for f in output.files} <= allowed:
                     raise ValueError('Repair attempted an unrelated file or test change; human approval required.')
+                if all(files[f.path] == f.content for f in output.files):
+                    raise ValueError('Repair made no source changes.')
                 for file in output.files:
                     preserve_guards(files[file.path], file.content)
                 candidate = {**files, **{f.path:f.content for f in output.files}}
@@ -122,6 +121,7 @@ def repair_developer(state: dict) -> dict:
                  'Repair attempted an unrelated file or test change; human approval required.',
                  'Repair cannot remove or alter existing validation guards; human review required.',
                  'Repair returned invalid task result.', 'Repair failed dependency validation.',
+                 'Repair made no source changes.',
                  'OpenAI developer request failed.'}
         event['details'] = str(exc) if str(exc) in known else 'Generation, syntax, contract, or safe persistence validation failed.'
         error = 'Repair rejected or unavailable. Review recovery history; files were not approved for QA.'
@@ -129,13 +129,3 @@ def repair_developer(state: dict) -> dict:
         status = 'qa_failed'
     return {'status':status, 'error':error, 'qa_repair_applied':status == 'development_complete',
             'recovery_history':[*state.get('recovery_history', []), redact(event)]}
-
-
-def finish_qa(state: dict) -> dict:
-    status = state['status']
-    reason = None
-    if status != 'qa_passed':
-        reason = ('Automatic repair budget exhausted.' if state.get('qa_repair_count', 0) >= MAX_REPAIRS
-                  else 'QA stopped: blocked execution, non-actionable failure, or repair requiring human review.')
-    event = {'stage':'qa_final', 'attempt':state.get('qa_repair_count', 0), 'outcome':status, 'reason':reason}
-    return {'failure_reason':reason, 'recovery_history':[*state.get('recovery_history', []), event]}

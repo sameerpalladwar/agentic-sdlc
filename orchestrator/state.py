@@ -4,10 +4,10 @@ from typing import Literal, NotRequired, TypedDict
 class WorkflowState(TypedDict):
     requirement: str
     requirements: NotRequired[dict | None]
-    status: Literal["pending", "requirements_complete", "needs_human_clarification", "failed", "paused", "rejected", "design_complete", "planning_complete", "developing", "development_paused", "development_complete", "qa_passed", "qa_failed", "qa_blocked", "qa_error", "design_generated", "design_invalid", "design_retrying", "repairing"]
+    status: Literal["pending", "requirements_complete", "needs_human_clarification", "failed", "paused", "rejected", "design_complete", "planning_complete", "developing", "development_paused", "development_complete", "qa_passed", "qa_failed", "qa_blocked", "qa_error", "design_generated", "design_invalid", "design_retrying", "repairing", "validating", "validation_passed", "validation_failed", "validation_blocked"]
     error: NotRequired[str | None]
     clarifications: NotRequired[list[dict]]
-    through: NotRequired[Literal["requirements", "design", "planning", "development", "qa"]]
+    through: NotRequired[Literal["requirements", "design", "planning", "development", "qa", "validation"]]
     design: NotRequired[dict | None]
     plan: NotRequired[dict | None]
     run_id: NotRequired[str]
@@ -31,3 +31,9 @@ class WorkflowState(TypedDict):
     qa_feedback: NotRequired[dict]
     qa_repair_count: NotRequired[int]
     qa_repair_applied: NotRequired[bool]
+
+    validation_revision: NotRequired[str | None]
+    validation_files: NotRequired[dict[str, str]]
+    qa_result: NotRequired[dict | None]
+    review_result: NotRequired[dict | None]
+    validation_result: NotRequired[dict | None]

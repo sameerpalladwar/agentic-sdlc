@@ -125,6 +125,8 @@ def test_trusted_fixture(app_directory, name, status):
 def test_workflow_and_persistence(tmp_path, monkeypatch, capsys, isolated_llm, payload, design_payload, success):
     import copy
     import run
+    from tests.conftest import approved_review
+    monkeypatch.setattr("agents.reviewer.generate_review", approved_review)
     monkeypatch.setattr(file_writer, "OUTPUT_ROOT", tmp_path / "output")
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
     fixture = completed_state(payload, design_payload, "a" * 32)
@@ -136,7 +138,7 @@ def test_workflow_and_persistence(tmp_path, monkeypatch, capsys, isolated_llm, p
     assert run.main(["start", "--stop-after", "qa", "--requirement", "Shorten URLs"]) == 3
     report = json.loads(capsys.readouterr().out)
     run_id = report["run_id"]
-    assert report["status"] == "qa_blocked"
+    assert report["status"] == "validation_blocked"
     def execute(*args, **kwargs):
         assert kwargs["local_authorized"] is True
         return QAResult(status="qa_passed" if success else "qa_failed", exit_code=0 if success else 1,
@@ -145,6 +147,10 @@ def test_workflow_and_persistence(tmp_path, monkeypatch, capsys, isolated_llm, p
     assert run.main(["qa", "--run-id", run_id, "--authorize-local-execution"]) == (0 if success else 1)
     report = json.loads(capsys.readouterr().out)
     assert report["run_id"] == run_id
-    assert report["status"] == ("qa_passed" if success else "qa_failed")
+    assert report["status"] == ("validation_passed" if success else "validation_failed")
     assert json.loads((run.RUNS_DIR / run_id / "qa_results.json").read_text()) == report["qa_results"]
     assert isolated_llm.responses.parse.call_count == 4
+
+    assert json.loads((run.RUNS_DIR / run_id / "review_results.json").read_text()) == report["review_result"]
+    assert json.loads((run.RUNS_DIR / run_id / "validation_results.json").read_text()) == report["validation_result"]
+    assert report["qa_result"]["revision"] == report["review_result"]["reviewed_revision"]

@@ -23,6 +23,8 @@ TEST = 'from application import value\n\ndef test_value():\n    assert value() =
 @pytest.fixture
 def ready(tmp_path, monkeypatch, payload, design_payload):
     monkeypatch.setattr(file_writer, 'OUTPUT_ROOT', tmp_path/'output')
+    from tests.conftest import approved_review
+    monkeypatch.setattr("agents.reviewer.generate_review", approved_review)
     state = completed_state(payload, design_payload, RUN)
     with SafeWorkspace(RUN) as workspace:
         output = DeveloperOutput(task_id='trusted-fixture', files=[
@@ -37,7 +39,7 @@ def ready(tmp_path, monkeypatch, payload, design_payload):
 
 
 def repair(content=GOOD, path='workspace/output_code/application.py', attempt=1):
-    return DeveloperOutput(task_id=f'qa-repair-{attempt}', files=[{'path':path,'content':content}],
+    return DeveloperOutput(task_id=f'qa-repair-{attempt}', files=[{'path':path,'content':content + f'# repair attempt {attempt}\n'}],
         implementation_summary='Correct constant result',
         acceptance_check_mapping=[{'check':'value returns one','implementation':'Return correct value'}],
         assumptions=[],warnings=[],completion_status='completed')
@@ -77,8 +79,8 @@ def test_repair_budget(ready,tmp_path,monkeypatch,attempts):
     result,transitions=execute(ready,tmp_path)
     assert result.get('qa_repair_count',0) == min(attempts,2)
     assert len(calls)==min(attempts,2)
-    assert result['status']==('qa_failed' if attempts==3 else 'qa_passed')
-    assert result['recovery_history'][-1]['stage']=='qa_final'
+    assert result['status']==('validation_failed' if attempts==3 else 'validation_passed')
+    assert result['recovery_history'][-1]['stage']=='validation_final'
     assert transitions.count('qa')==min(attempts,2)+1
     if calls:
         assert calls[0]['requirements']==ready['requirements']
@@ -115,7 +117,7 @@ def test_repair_rejected_without_corruption(ready,tmp_path,monkeypatch,kind):
         monkeypatch.setattr('orchestrator.qa_recovery.preserve_guards',lambda *a:(_ for _ in ()).throw(ValueError('guard')))
     monkeypatch.setattr('orchestrator.qa_recovery.generate_task',generate)
     result,transitions=execute(ready,tmp_path)
-    assert result['status']=='qa_failed'
+    assert result['status']=='validation_failed'
     with SafeWorkspace(RUN) as w: assert w.snapshot()==original
     assert transitions.count('qa')==1
 
@@ -130,7 +132,7 @@ def test_real_trusted_pytest_repair(ready,tmp_path,monkeypatch,correct):
     monkeypatch.setattr('orchestrator.qa_runner.qa_python',lambda run_id:Path(sys.executable))
     monkeypatch.setattr('orchestrator.qa_recovery.generate_task',lambda context:repair(content=GOOD if correct else BAD, attempt=int(context['task_id'].rsplit('-',1)[1])))
     result,transitions=execute(ready,tmp_path)
-    assert result['status']==('qa_passed' if correct else 'qa_failed')
+    assert result['status']==('validation_passed' if correct else 'validation_failed')
     qa=[h for h in result['recovery_history'] if h.get('stage')=='qa']
     assert [h['qa_results']['failed_tests'] for h in qa]==([1,0] if correct else [1,1,1])
     assert qa[-1]['qa_results']['passed_tests']==int(correct)
@@ -157,7 +159,7 @@ def test_checkpoint_replay(ready,tmp_path,monkeypatch):
     with SqliteSaver.from_conn_string(str(tmp_path/'checkpoint.sqlite')) as saver:
         graph=build_graph(saver)
         result=graph.invoke(None,config)
-    assert result['status']=='qa_passed' and result['qa_repair_count']==1
+    assert result['status']=='validation_passed' and result['qa_repair_count']==1
     assert len(calls)==1
 
 
@@ -167,7 +169,7 @@ def test_repair_uses_existing_sdk(ready,tmp_path,monkeypatch,isolated_llm):
     monkeypatch.setattr(qa,'run_tests',lambda *a,**k:reports.pop(0))
     isolated_llm.responses.parse.return_value=SimpleNamespace(status='completed',output_parsed=repair().model_dump())
     result,_=execute(ready,tmp_path)
-    assert result['status']=='qa_passed'
+    assert result['status']=='validation_passed'
     context=json.loads(isolated_llm.responses.parse.call_args.kwargs['input'][1]['content'])
     assert context['mode']=='qa_repair' and context['task_id']=='qa-repair-1'
     assert context['allowed_repair_paths']==['workspace/output_code/application.py']

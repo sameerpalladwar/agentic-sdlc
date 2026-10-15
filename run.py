@@ -33,7 +33,7 @@ def execute(args: argparse.Namespace) -> dict:
         run_dir.mkdir(parents=True, exist_ok=False)
     elif not (run_dir / "checkpoints.sqlite").is_file():
         raise ValueError("Unknown run: no persistent checkpoint found.")
-    for name in ("checkpoints.sqlite", "requirements.json", "design.json", "plan.json", "development_results.json", "qa_results.json", "recovery_history.json", "status.json"):
+    for name in ("checkpoints.sqlite", "requirements.json", "design.json", "plan.json", "development_results.json", "qa_results.json", "review_results.json", "validation_results.json", "recovery_history.json", "status.json"):
         if (run_dir / name).is_symlink():
             raise ValueError("Run artifacts must not be symlinks.")
 
@@ -46,7 +46,7 @@ def execute(args: argparse.Namespace) -> dict:
                                    "design_retry_count": 0, "design_max_retries": 2, "recovery_history": []}, config)
         elif args.command == "qa":
             snapshot = graph.get_state(config)
-            if snapshot.values.get("status") not in {"development_complete", "qa_passed", "qa_failed", "qa_blocked", "qa_error"}:
+            if snapshot.values.get("status") not in {"development_complete", "qa_passed", "qa_failed", "qa_blocked", "qa_error", "validation_passed", "validation_failed", "validation_blocked"}:
                 raise ValueError("QA requires a run with completed development.")
             graph.update_state(config, {"through": "qa", "status": "development_complete", "active_task": None,
                                         "qa_local_authorized": args.authorize_local_execution,
@@ -56,7 +56,7 @@ def execute(args: argparse.Namespace) -> dict:
             snapshot = graph.get_state(config)
             interrupted = any(task.interrupts for task in snapshot.tasks)
             if not interrupted:
-                if args.retry_development and snapshot.values.get("status") in {"developing", "repairing", "development_complete", "qa_failed", "qa_passed"} and snapshot.next:
+                if args.retry_development and snapshot.values.get("status") in {"developing", "repairing", "development_complete", "qa_failed", "qa_passed", "validating", "validation_failed", "validation_passed", "validation_blocked"} and snapshot.next:
                     # A process stopped between development checkpoints; replay only pending nodes.
                     result = graph.invoke(None, config)
                 else:
@@ -78,6 +78,10 @@ def execute(args: argparse.Namespace) -> dict:
                   "plan": result.get("plan"),
                   "development_issues": result.get("development_issues", []),
                   "development_results": result.get("development_results"),
+                  "qa_result": result.get("qa_result"),
+                  "review_result": result.get("review_result"),
+                  "validation_result": result.get("validation_result"),
+                  "validation_revision": result.get("validation_revision"),
                   "qa_repair_count": result.get("qa_repair_count", 0),
                   "qa_results": result.get("qa_results"),
                   "design_validation_status": result.get("design_validation_status"),
@@ -107,10 +111,13 @@ def execute(args: argparse.Namespace) -> dict:
     if report["qa_results"] is not None:
         (run_dir / "qa_results.json").write_text(
             json.dumps(report["qa_results"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    for key, name in (("review_result", "review_results.json"), ("validation_result", "validation_results.json")):
+        if report[key] is not None:
+            atomic_write(run_dir / name, json.dumps(report[key], indent=2, ensure_ascii=False) + "\n")
     if report["recovery_history"]:
         history = redact(report["recovery_history"])
         for attempt in history:
-            if attempt.get("stage") in {"qa", "developer_repair", "qa_final"}:
+            if attempt.get("stage") is not None:
                 continue
             atomic_write(run_dir / "design_attempts" / f"attempt_{attempt['attempt']:03d}.json",
                          json.dumps(attempt, indent=2, ensure_ascii=False) + "\n")
@@ -124,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     start = commands.add_parser("start", help="Start a new persistent run")
     start.add_argument("--requirement", required=True)
-    start.add_argument("--through", "--stop-after", choices=["requirements", "design", "planning", "development", "qa"], default="requirements",
+    start.add_argument("--through", "--stop-after", choices=["requirements", "design", "planning", "development", "qa", "validation"], default="requirements",
                        help="Final stage to execute (persisted for resume)")
     start.add_argument("--development-budget", type=int, choices=range(1, 51), default=20, metavar="1..50")
     resume = commands.add_parser("resume", help="Answer questions or reject a paused run")
@@ -133,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     choice.add_argument("--answers", help="Answers to the open questions as plain text")
     choice.add_argument("--retry-development", action="store_true", help="Retry failed development or continue after budget exhaustion")
     choice.add_argument("--reject", action="store_true", help="End the run without another LLM call")
-    qa = commands.add_parser("qa", help="Test an existing reviewed generated application")
+    qa = commands.add_parser("qa", help="Run parallel QA and Code Review on an existing reviewed application")
     qa.add_argument("--run-id", required=True)
     qa.add_argument("--authorize-local-execution", action="store_true",
                     help="Authorize local execution of this reviewed run; a venv is NOT a sandbox")
@@ -150,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "failed", "error": str(exc)}), file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, ensure_ascii=False))
-    return 1 if report["status"] in {"failed", "qa_failed", "qa_error"} else (3 if report["status"] == "qa_blocked" else 0)
+    return 1 if report["status"] in {"failed", "qa_failed", "qa_error", "validation_failed"} else (3 if report["status"] in {"qa_blocked", "validation_blocked"} else 0)
 
 
 if __name__ == "__main__":
