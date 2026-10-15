@@ -96,6 +96,11 @@ def test_graph_topology():
         ("__start__", "requirements"), ("requirements", "__end__"),
         ("requirements", "design"), ("design", "__end__"),
         ("design", "planning"), ("planning", "__end__"),
+        ("planning", "development_prepare"), ("development_prepare", "development_select"),
+        ("development_prepare", "__end__"), ("development_select", "developer"),
+        ("development_select", "development_gate"), ("development_select", "__end__"),
+        ("developer", "development_select"), ("development_gate", "development_select"),
+        ("development_gate", "__end__"),
         ("requirements", "pause"), ("pause", "clarification"),
         ("clarification", "requirements"), ("clarification", "__end__"),
     }

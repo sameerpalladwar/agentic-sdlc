@@ -5,6 +5,7 @@ Stage 1 converts natural-language requirements into structured user stories usin
 Stage 2 pauses ambiguous runs for human clarification and resumes from persistent checkpoints.
 Stage 3 optionally converts completed requirements into a reviewable technical design.
 Stage 4 optionally converts that design into a validated development task plan.
+Stage 5 optionally generates application files one task at a time without executing them.
 
 ## Architecture Overview
 
@@ -107,7 +108,7 @@ python run.py --requirement "Build a URL shortener service" --through design
 ```
 
 `--through` defaults to `requirements`, preserving Stage 1 and Stage 2 behavior.
-`--stop-after` is an alias for `--through`; both accept `requirements`, `design`, or `planning`.
+`--stop-after` is an alias for `--through`; both accept `requirements`, `design`, `planning`, or `development`.
 It is stored in the checkpoint. If a design-enabled run pauses, answer it with
 the usual resume command; no need to re-enter requirements or repeat the option:
 
@@ -221,7 +222,98 @@ A successful run adds `plan.json` beside `requirements.json`, `design.json`,
 and checkpoint include `plan`. Failed, paused, or rejected planning-enabled runs
 do not create a plan artifact. These files remain ignored by Git. Planned artifact
 paths are metadata only: Stage 4 writes no application files and executes no code
-or generated shell commands. There is no Developer Agent yet.
+or generated shell commands during planning.
+
+## Developer Agent
+
+Generate an application through the development stage:
+
+```bash
+python run.py start --stop-after development --requirement "Build a URL shortener using FastAPI and SQLite. POST /shorten creates short URLs; GET /{short_code} redirects visitors."
+```
+
+Existing requirements/design/planning commands retain their behavior. This opt-in
+runs `requirements -> design -> planning -> development_prepare`, then loops
+`development_select -> developer -> development_select`. Requirements still pause
+for clarification before design. Invalid or failed planning never reaches development.
+
+The Developer Agent receives the existing structured requirements, design, plan,
+current task, previous attempt results, and managed file contents. Each selection
+marks one ready task `in_progress` in a checkpoint. Its dependencies must all be
+`completed`. After output/schema/acceptance-mapping/path validation, Python syntax
+parsing, and successful persistence, that task becomes `completed` and readiness
+is recalculated. Failed tasks become `failed`; their dependents remain `blocked`.
+Completion is a static implementation result, not a claim that tests passed.
+
+Application files are generated under `workspace/output_code/<run_id>/`, separate
+from the harness. Plan paths such as `workspace/output_code/app/main.py` map to
+`workspace/output_code/<run_id>/app/main.py`. A task can only return its declared
+artifacts. The updated planner explicitly includes standalone requirements.txt,
+README.md, package files, and pytest tests for the URL shortener demo.
+
+`orchestrator/file_writer.py` rejects absolute/traversal paths, symlinks, unsafe
+names, sensitive filenames, unsupported extensions, hardlinked destinations, and
+unrelated or externally modified files. It validates all changes before writing,
+limits file/output sizes, and atomically replaces individual files. A run-local
+`.developer-state.json` journal and task receipts allow interrupted multi-file
+writes to be completed safely on replay. It is not an atomic transaction across
+all files: a failed task may leave partial files, but is never marked completed.
+A run-local lock prevents simultaneous writer operations. Do not edit generated
+files or control files while the workflow is active. Receipts and hashes detect
+external edits; this local MVP is not a sandbox against hostile local processes.
+
+Each task is a separate LangGraph checkpoint. `development_results.json` in
+`workspace/runs/<run_id>/` records attempts, structured outputs, generated paths,
+and whether persistence completed. `plan.json` reflects task status changes.
+`status.json` and SQLite retain the run's development progress. Receipts store
+full output for replay. None of these artifacts are committed by default.
+
+Generation is bounded to 20 task attempts per invocation (set
+`--development-budget 1..50` on start) and three attempts per task across retries.
+On task failure or budget exhaustion, `development_gate` interrupts and the CLI
+returns `paused`. Retry explicitly using the same run:
+
+```bash
+python run.py resume --run-id <run_id> --retry-development
+# Or end the run while retaining its artifacts:
+python run.py resume --run-id <run_id> --reject
+```
+
+Retry preserves completed tasks and resets failed tasks to pending. The per-call
+budget resets; per-task attempt counts do not. If a process stops between developer
+checkpoints, `--retry-development` replays pending development nodes using file
+receipts rather than regenerating a successfully persisted task. A third failed
+attempt requires a new run after review. Completed runs cannot be resumed.
+
+No generated code, imports, tests, dependency installation, or model-suggested
+commands are executed by the harness. Acceptance mapping is the LLM's explanation,
+not independent verification. Syntax validation does not establish runtime
+correctness, security, or completeness. QA and Review Agents are not implemented.
+`pytest.ini` restricts harness test discovery to tests/ so generated tests are
+never collected by a harness pytest run. Pass `tests` explicitly when testing a
+generated app inside this repository. Review the generated code and its README
+before manually running it in an isolated
+local environment. For the demo's app/main.py entry point:
+
+```bash
+cd workspace/output_code/<run_id>
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pytest -q tests
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/shorten -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
+curl -i http://127.0.0.1:8000/<returned_short_code>
+curl -i http://127.0.0.1:8000/nonexistent-code
+```
+
+Use the request field and entry point in the actual generated README if its
+approved design differs. Runtime commands above are for manual use only.
 
 ## Test
 
@@ -237,6 +329,15 @@ cover schema and traceability validation, successful generation, missing or
 ineligible requirements, LLM errors, and clarification resume through design.
 Planning tests cover DAG validation, ordering/readiness, ownership, story coverage,
 safe failures, artifact persistence, and clarification resume through planning.
+Developer tests cover persistence, unsafe paths, dependency transitions, failure/retry,
+budgets, journal recovery, and checkpoint replay without executing generated code.
 
-Requirements, Design, and Planning Agents are implemented. The architecture diagram illustrates
-the broader planned workflow; no Developer Agent or application code generation is implemented.
+Requirements, Design, Planning, and Developer Agents are implemented. The architecture
+diagram illustrates the broader planned workflow; QA and Review Agents remain future work.
+
+For Python 3.14 generated apps, the developer prompt requires Pydantic V2 and
+compatible FastAPI dependencies, all imported packages, and explicit router
+registration. The Uvicorn module must match the actual generated file layout.
+Redirect examples use GET (`curl -i`), because HEAD (`curl -I`) is not implicitly
+supported by a GET-only endpoint. Generated app requirements belong in its own
+run directory, separate from this harness's requirements.txt.

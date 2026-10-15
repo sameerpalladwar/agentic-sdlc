@@ -23,6 +23,11 @@ generate application code, or claim work is completed.
   under workspace/output_code/, e.g. workspace/output_code/app/main.py.
   Never name absolute paths, parent traversal, environment secrets, or harness files.
   A verification-only task may have no expected artifacts.
+- For a standalone URL shortener, explicitly plan requirements.txt, README.md,
+  Python package files, and pytest test files as well as application code. Make
+  the final app independently installable and runnable. Put runtime validation in
+  generated test files; do not require a Developer Agent to execute tests or manual
+  checks. Use a small plan (normally 4-8 tasks) with consistent interfaces.
 
 ## Dependency and ownership rules
 - Dependencies are task IDs that must complete before the task starts. Include
@@ -34,6 +39,11 @@ generate application code, or claim work is completed.
 - Every task must have at least one nonempty acceptance check. Mark new tasks
   pending; the harness calculates ready versus blocked, topological order, and
   does not trust LLM completion claims.
+- Before returning, count ownership of every expected_artifacts path across all
+  tasks. For each path appearing in two or more tasks, include exactly one
+  shared_artifacts entry naming exactly those task IDs. Do not omit an owner or
+  include a justification for a path with only one owner. Prefer separate modules
+  to unnecessary shared edits.
 
 ## Structured output
 Return ExecutionPlan with tasks and shared_artifacts (empty when no files are
@@ -43,3 +53,11 @@ ImplementationTask schema for each task. Valid lifecycle status values are
 pending, ready, in_progress, completed, blocked, failed; new tasks must be pending.
 Do not ask the user to repeat requirements or design. Record implementation
 instructions in task descriptions and ensure they follow the supplied design.
+
+## Final application integration
+For HTTP applications, assign router registration and final entry-point wiring to
+an explicit task after endpoint modules exist. Declare the entry-point file in
+that task's expected_artifacts and justify shared ownership when necessary.
+Assign final README and dependency updates so the run command, test command,
+actual modules, Python runtime, and installed packages agree. Do not leave these
+integration steps implicit or owned only by an initial scaffold task.

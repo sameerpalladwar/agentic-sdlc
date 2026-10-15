@@ -6,20 +6,31 @@ from orchestrator.state import WorkflowState
 from agents.requirements import requirements_agent
 from agents.design import design_agent
 from agents.planning import planning_agent
+from orchestrator.development import prepare_development, select_task, developer_agent, development_gate
 
 
 def route_requirements(state: WorkflowState) -> str:
     if state["status"] == "needs_human_clarification":
         return "pause"
-    if state["status"] == "requirements_complete" and state.get("through") in {"design", "planning"}:
+    if state["status"] == "requirements_complete" and state.get("through") in {"design", "planning", "development"}:
         return "design"
     return END
 
 
 def route_design(state: WorkflowState) -> str:
-    if state["status"] == "design_complete" and state.get("through") == "planning":
+    if state["status"] == "design_complete" and state.get("through") in {"planning", "development"}:
         return "planning"
     return END
+
+
+def route_planning(state: WorkflowState) -> str:
+    return "development_prepare" if state["status"] == "planning_complete" and state.get("through") == "development" else END
+
+
+def route_selection(state: WorkflowState) -> str:
+    if state["status"] == "development_paused":
+        return "development_gate"
+    return "developer" if state.get("active_task") else END
 
 
 def mark_paused(state: WorkflowState) -> dict:
@@ -54,7 +65,15 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     graph.add_node("design", design_agent)
     graph.add_node("planning", planning_agent)
     graph.add_conditional_edges("design", route_design, ["planning", END])
-    graph.add_edge("planning", END)
+    graph.add_conditional_edges("planning", route_planning, ["development_prepare", END])
+    graph.add_node("development_prepare", prepare_development)
+    graph.add_node("development_select", select_task)
+    graph.add_node("developer", developer_agent)
+    graph.add_node("development_gate", development_gate)
+    graph.add_conditional_edges("development_prepare", lambda s: "development_select" if s["status"] == "developing" else END, ["development_select", END])
+    graph.add_conditional_edges("development_select", route_selection, ["developer", "development_gate", END])
+    graph.add_edge("developer", "development_select")
+    graph.add_conditional_edges("development_gate", lambda s: "development_select" if s["status"] == "developing" else END, ["development_select", END])
     graph.add_node("pause", mark_paused)
     graph.add_node("clarification", clarify)
     graph.add_edge(START, "requirements")
