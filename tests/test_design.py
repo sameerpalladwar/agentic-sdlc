@@ -8,18 +8,19 @@ from openai import APIConnectionError
 from pydantic import ValidationError
 
 import agents.design as agent
-from orchestrator.design_validation import design_validator, design_safe_stop
-from models.design import DesignOutput
-from orchestrator.graph import build_graph
 import run
-
-
+from models.design import DesignOutput
+from orchestrator.design_validation import design_safe_stop, design_validator
 
 
 def attempt(state):
     generated = agent.design_agent(state)
     checked = design_validator({**state, **generated})
-    return {**generated, **checked, **(design_safe_stop(checked) if checked["design_validation_status"] == "invalid" else {})}
+    return {
+        **generated,
+        **checked,
+        **(design_safe_stop(checked) if checked["design_validation_status"] == "invalid" else {}),
+    }
 
 
 def response(payload):
@@ -27,8 +28,12 @@ def response(payload):
 
 
 def state(payload):
-    return {"requirement": "Shorten URLs using FastAPI and SQLite", "requirements": payload,
-            "status": "requirements_complete", "through": "design"}
+    return {
+        "requirement": "Shorten URLs using FastAPI and SQLite",
+        "requirements": payload,
+        "status": "requirements_complete",
+        "through": "design",
+    }
 
 
 def test_success(isolated_llm, payload, design_payload):
@@ -102,7 +107,9 @@ def test_traceability_validation(change, isolated_llm, payload, design_payload):
 
 
 def test_api_error(isolated_llm, payload):
-    isolated_llm.responses.parse.side_effect = APIConnectionError(request=httpx.Request("POST", "https://api.openai.com"))
+    isolated_llm.responses.parse.side_effect = APIConnectionError(
+        request=httpx.Request("POST", "https://api.openai.com")
+    )
     result = attempt(state(payload))
     assert result["status"] == "failed"
     assert result["design"] is None
@@ -118,20 +125,25 @@ def test_missing_configuration(monkeypatch, isolated_llm, payload):
 def test_missing_prompt(monkeypatch, isolated_llm, payload):
     def missing(*args):
         raise FileNotFoundError
+
     monkeypatch.setattr(agent, "load_prompt", missing)
     assert "Unable to load the design prompt." in attempt(state(payload))["error"]
     isolated_llm.responses.parse.assert_not_called()
 
 
 def test_incomplete(isolated_llm, payload, design_payload):
-    isolated_llm.responses.parse.return_value = SimpleNamespace(status="incomplete", output_parsed=design_payload)
+    isolated_llm.responses.parse.return_value = SimpleNamespace(
+        status="incomplete", output_parsed=design_payload
+    )
     assert attempt(state(payload))["status"] == "failed"
 
 
 def test_clear_through_design(tmp_path, monkeypatch, capsys, isolated_llm, payload, design_payload):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
     isolated_llm.responses.parse.side_effect = [response(payload), response(design_payload)]
-    assert run.main(["start", "--through", "design", "--requirement", "Shorten URLs"]) == 0
+    assert (
+        run.main(["--json", "start", "--through", "design", "--requirement", "Shorten URLs"]) == 0
+    )
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "design_complete"
     directory = run.RUNS_DIR / report["run_id"]
@@ -140,37 +152,69 @@ def test_clear_through_design(tmp_path, monkeypatch, capsys, isolated_llm, paylo
     assert isolated_llm.responses.parse.call_count == 2
 
 
-def test_paused_then_resumed_design(tmp_path, monkeypatch, capsys, isolated_llm, payload, design_payload):
+def test_paused_then_resumed_design(
+    tmp_path, monkeypatch, capsys, isolated_llm, payload, design_payload
+):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
     ambiguous = copy.deepcopy(payload)
-    ambiguous.update(user_stories=[], requires_human_clarification=True, open_questions=["What should users do?"])
-    isolated_llm.responses.parse.side_effect = [response(ambiguous), response(payload), response(design_payload)]
-    assert run.main(["start", "--through", "design", "--requirement", "Build a secure scalable app"]) == 0
+    ambiguous.update(
+        user_stories=[], requires_human_clarification=True, open_questions=["What should users do?"]
+    )
+    isolated_llm.responses.parse.side_effect = [
+        response(ambiguous),
+        response(payload),
+        response(design_payload),
+    ]
+    assert (
+        run.main(
+            [
+                "--json",
+                "start",
+                "--through",
+                "design",
+                "--requirement",
+                "Build a secure scalable app",
+            ]
+        )
+        == 0
+    )
     paused = json.loads(capsys.readouterr().out)
     assert paused["status"] == "paused"
     assert isolated_llm.responses.parse.call_count == 1
     assert not (run.RUNS_DIR / paused["run_id"] / "design.json").exists()
-    assert run.main(["resume", "--run-id", paused["run_id"], "--answers", "Shorten URLs"]) == 0
+    assert (
+        run.main(["--json", "resume", "--run-id", paused["run_id"], "--answers", "Shorten URLs"])
+        == 0
+    )
     completed = json.loads(capsys.readouterr().out)
     assert completed["status"] == "design_complete"
     assert completed["thread_id"] == paused["thread_id"]
     assert completed["through"] == "design"
     assert len(completed["clarifications"]) == 1
-    assert json.loads(isolated_llm.responses.parse.call_args.kwargs["input"][1]["content"])["clarifications"][0]["answers"] == "Shorten URLs"
+    assert (
+        json.loads(isolated_llm.responses.parse.call_args.kwargs["input"][1]["content"])[
+            "clarifications"
+        ][0]["answers"]
+        == "Shorten URLs"
+    )
 
 
 @pytest.mark.parametrize("reject", [False, True])
-def test_failure_or_rejection_skips_design(tmp_path, monkeypatch, capsys, isolated_llm, payload, reject):
+def test_failure_or_rejection_skips_design(
+    tmp_path, monkeypatch, capsys, isolated_llm, payload, reject
+):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
     if reject:
-        payload.update(user_stories=[], requires_human_clarification=True, open_questions=["What behavior?"])
+        payload.update(
+            user_stories=[], requires_human_clarification=True, open_questions=["What behavior?"]
+        )
         isolated_llm.responses.parse.return_value = response(payload)
     else:
         isolated_llm.responses.parse.return_value = response(None)
-    code = run.main(["start", "--through", "design", "--requirement", "Build an app"])
+    code = run.main(["--json", "start", "--through", "design", "--requirement", "Build an app"])
     report = json.loads(capsys.readouterr().out)
     if reject:
-        assert run.main(["resume", "--run-id", report["run_id"], "--reject"]) == 0
+        assert run.main(["--json", "resume", "--run-id", report["run_id"], "--reject"]) == 0
         report = json.loads(capsys.readouterr().out)
         assert report["status"] == "rejected"
     else:
@@ -180,22 +224,33 @@ def test_failure_or_rejection_skips_design(tmp_path, monkeypatch, capsys, isolat
     assert not (run.RUNS_DIR / report["run_id"] / "design.json").exists()
 
 
-def test_design_failure_preserves_requirements(tmp_path, monkeypatch, capsys, isolated_llm, payload):
+def test_design_failure_preserves_requirements(
+    tmp_path, monkeypatch, capsys, isolated_llm, payload
+):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
-    isolated_llm.responses.parse.side_effect = [response(payload), response({}), response({}), response({})]
-    assert run.main(["start", "--through", "design", "--requirement", "Shorten URLs"]) == 1
+    isolated_llm.responses.parse.side_effect = [
+        response(payload),
+        response({}),
+        response({}),
+        response({}),
+    ]
+    assert (
+        run.main(["--json", "start", "--through", "design", "--requirement", "Shorten URLs"]) == 1
+    )
     failed = json.loads(capsys.readouterr().out)
     assert failed["status"] == "failed"
     assert failed["requirements"] == payload
     assert failed["design"] is None
-    assert json.loads((run.RUNS_DIR / failed["run_id"] / "requirements.json").read_text()) == payload
+    assert (
+        json.loads((run.RUNS_DIR / failed["run_id"] / "requirements.json").read_text()) == payload
+    )
     assert not (run.RUNS_DIR / failed["run_id"] / "design.json").exists()
 
 
 def test_requirements_only_never_calls_design(tmp_path, monkeypatch, capsys, isolated_llm, payload):
     monkeypatch.setattr(run, "RUNS_DIR", tmp_path / "runs")
     isolated_llm.responses.parse.return_value = response(payload)
-    assert run.main(["start", "--requirement", "Shorten URLs"]) == 0
+    assert run.main(["--json", "start", "--requirement", "Shorten URLs"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "requirements_complete"
     assert report["through"] == "requirements"

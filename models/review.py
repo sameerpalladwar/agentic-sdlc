@@ -1,12 +1,14 @@
+"""Independent, evidence-backed code review findings and revision metadata."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class ReviewFinding(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra="forbid")
     finding_id: str = Field(min_length=1)
-    severity: Literal['critical', 'high', 'medium', 'low', 'informational']
+    severity: Literal["critical", "high", "medium", "low", "informational"]
     category: str = Field(min_length=1)
     file_path: str
     line_number: int | None = Field(default=None, ge=1)
@@ -17,8 +19,8 @@ class ReviewFinding(BaseModel):
 
 
 class CodeReviewResult(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    status: Literal['approved', 'changes_requested', 'blocked', 'error']
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["approved", "changes_requested", "blocked", "error"]
     summary: str
     findings: list[ReviewFinding]
     blocking_findings_count: int = Field(ge=0)

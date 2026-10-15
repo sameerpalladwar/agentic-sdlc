@@ -9,6 +9,8 @@ Stage 5 optionally generates application files one task at a time without execut
 Stage 6 runs approved local pytest and records actual test results.
 Stage 7 runs independent Code Review alongside QA on a frozen revision, then joins
 both results at a deterministic Validation Gate with bounded source repair.
+Stage 8 optionally requests human approval and delivers a final manifest, with per-run
+logs, structured events and concise terminal progress.
 
 ## Architecture Overview
 
@@ -33,8 +35,8 @@ take precedence. Use a model that supports structured outputs; the example uses
 python run.py start --requirement "Build a URL shortener service"
 ```
 
-The CLI prints a JSON report with `run_id`, `thread_id`, `status`, `requirements`,
-and clarification history. Each start creates a unique run ID that remains the
+The CLI prints a concise summary by default. Add `--json` for the full report with
+`run_id`, `thread_id`, `status`, `requirements`, and clarification history. Each start creates a unique run ID that remains the
 LangGraph thread ID throughout the run. The Stage 1 `--requirement` shorthand still works.
 
 Ambiguous requirements produce `status: "paused"` and `open_questions`. The command
@@ -421,7 +423,7 @@ retryable. Missing credentials/prompts, permissions, API quota/connectivity,
 unsupported SDK/schema requests, refusals, and credential-like output are
 non-retryable: correcting a design cannot resolve those conditions. Safe stop
 returns `failed`, actionable `failure_reason` and issues, and does not run planning,
-development, or QA. No extra human approval or autonomous shell execution is added.
+development, or QA. Design correction itself adds no approval or shell execution; the optional delivery target adds final human approval after validation.
 
 State and SQLite store `design_validation_status`, `design_validation_issues`,
 `design_retry_count`, `design_max_retries`, `recovery_history`, and `failure_reason`.
@@ -465,7 +467,7 @@ Developer tests cover persistence, unsafe paths, dependency transitions, failure
 budgets, journal recovery, and checkpoint replay without executing generated code.
 
 Requirements, Design, Planning, Developer, QA, and independent Review Agents are
-implemented. Final human approval remains a future stage.
+implemented. The delivery target adds revision-bound human approval and a final manifest.
 
 For Python 3.12 generated apps, the developer prompt requires the fixed dependency
 profile below, all imported packages, and explicit router
@@ -590,3 +592,155 @@ criteria remain `not_verified` without test-to-story evidence. QA remains explic
 authorized local execution with no security sandbox; the approval includes bounded
 QA reruns after targeted source repairs. No generated dependencies are installed
 automatically. A reviewer API/configuration failure blocks combined validation.
+
+## Stage 8: human approval and final delivery
+
+The `delivery` target adds human approval after successful parallel validation.
+Existing stopping points (`requirements` through `qa`/`validation`) remain supported.
+No final approval is inferred from test results or an LLM review.
+
+```mermaid
+flowchart TD
+    R[Requirements] --> C{Clarification needed?}
+    C -->|yes| H[Human clarification interrupt]
+    H --> R
+    C -->|no| D[Design and deterministic validator]
+    D --> P[Planning]
+    P --> DEV[Developer task DAG]
+    DEV --> S[Freeze revision]
+    S --> QA[Authorized local pytest]
+    S --> CR[Independent Code Review]
+    QA --> V[Validation Gate: wait for both]
+    CR --> V
+    V -->|actionable failure, budget available| FIX[Developer repair: max 2 automatic attempts]
+    FIX --> S
+    V -->|blocked or exhausted| STOP[Safe stop]
+    V -->|passed, delivery requested| A[Human approval interrupt]
+    V -->|passed, validation stopping point| END[Validation passed]
+    A -->|approve current revision| OUT[Final manifest: completed]
+    A -->|request changes plus feedback| HF[Targeted human-requested source repair]
+    HF --> S
+    A -->|reject| REJECT[Rejected]
+```
+
+Generate, review the code/dependencies, prepare the dedicated QA environment described
+above, then explicitly authorize local execution:
+
+```bash
+python run.py --requirement "Build a URL shortener using FastAPI and SQLite with POST /shorten, GET /{short_code}, and automated tests." --stop-after delivery
+python3.12 -m venv workspace/qa_venvs/<run_id>
+# Only after reviewing dependencies; the harness never installs them:
+workspace/qa_venvs/<run_id>/bin/python -m pip install -r workspace/output_code/<run_id>/requirements.txt
+python run.py qa --run-id <run_id> --authorize-local-execution --stop-after delivery
+```
+
+On passing validation the CLI exits with `paused`, presenting the requirement summary,
+code location, QA/Review summaries, exact revision ID and limitations. The checkpoint
+retains `awaiting_approval` across process restarts. Respond explicitly using that revision:
+
+```bash
+python run.py decide --run-id <run_id> --revision <revision_id> --decision approve
+python run.py decide --run-id <run_id> --revision <revision_id> --decision reject --feedback "Not ready"
+python run.py decide --run-id <run_id> --revision <revision_id> --decision request_changes \
+  --feedback "Correct the return value in application.py" \
+  --file workspace/output_code/application.py
+```
+
+Choose one decision. Feedback is mandatory for `request_changes`. Repeated `--file`
+options scope existing application source; without them, the repair can select existing
+non-test Python source. Test edits, new files, security-guard changes and design changes
+are not authorized by this mechanism and stop for separate human review/new runs.
+The human repair is one bounded model call per explicit request; it does not reset the
+automatic two-repair budget. Validation is invalidated immediately in checkpoint state,
+both QA and Review rerun on changed code, and a new approval request is required.
+The prior execution authorization covers these requested targeted repair/test cycles.
+
+Approval checks live managed-file hashes and both independent passing results. Pending
+approval blocks harness Developer writes. Stale/duplicate decisions are rejected; a small
+workspace journal makes accepted decisions replay-safe after a process interruption.
+Only an approved current revision reaches `completed`. Nothing is deployed or pushed.
+
+`final_manifest.json` includes run ID, approved revision, requirements/user-story/design/
+plan artifact paths, generated application location, QA/Review summaries, human decision,
+UTC completion time and known limitations. User stories are stored in `requirements.json`.
+Approval does not change `not_verified` acceptance criteria into verified claims.
+Completed managed code is write-protected by the harness, not by host filesystem isolation.
+
+## Execution logs and terminal output
+
+Each CLI invocation appends to these private per-run files:
+
+| Artifact | Purpose |
+| --- | --- |
+| `execution.log` | Readable UTC timestamps, severity, stage/status and durations |
+| `events.jsonl` | Structured run, node, parallel branch, transition, repair, gate, approval and artifact events |
+| `approval_request.json` | Current approval context; invalidated requests become null |
+| `approval_history.json` | Accepted decisions tied to request IDs and code revisions |
+| `final_manifest.json` | Human-approved final handoff metadata |
+| `status.json` / `checkpoints.sqlite` | Exported report / authoritative durable state |
+
+Logs use allowlisted metadata (`run_id`, stage, attempt, revision, duration, status and
+artifact names). They exclude raw source/model/state payloads, .env contents, human
+feedback and exception messages. Unexpected exceptions record type and stack frames
+without source lines or locals. Known credential values/token-like strings are redacted.
+A `run_completed` log event means a CLI invocation ended; only checkpoint status
+`completed` means human-approved delivery. Logging I/O failures do not change graph state.
+Handlers are closed per invocation, so checkpoint resumes do not duplicate handlers.
+
+Progress goes to stderr: one updating line in ANSI terminals, compact stage lines in CI
+or plain terminals. QA/Review updates are serialized and combined while active. Completed
+summaries stay visible; no terminal input is read by the harness.
+
+```bash
+python run.py start --requirement "Shorten URLs" --verbose
+python run.py qa --run-id <run_id> --authorize-local-execution --no-progress
+python run.py start --requirement "Shorten URLs" --json
+```
+
+Default stdout is a concise summary and artifact paths. Automation that consumed the
+previous full JSON stdout should add `--json`; this explicitly opts into the large
+compatibility report. `--verbose` adds safe stage timings, not raw LLM responses.
+`--no-progress` disables progress; `TERM=dumb`, non-TTY streams or `NO_COLOR` disable ANSI.
+
+## Module map and development checks
+
+| Module | Responsibility |
+| --- | --- |
+| `agents/`, `prompts/`, `models/` | Specialized SDK adapters, instructions, structured contracts |
+| `orchestrator/graph.py`, `state.py` | Routing, fan-out/fan-in and checkpoint state |
+| `development.py`, `task_plan.py`, `file_writer.py` | Task execution, DAG validation, safe journaled persistence |
+| `revision.py`, `validation.py`, `qa_recovery.py` | Frozen source, combined evidence, bounded automatic repairs |
+| `approval.py` | Revision-bound human decisions and delivery metadata |
+| `observability.py`, `progress.py` | Safe standard-library logging and synchronized terminal rendering |
+| `artifacts.py`, `run.py` | Atomic exports, CLI operations and SQLite checkpoint ownership |
+
+No formatter/linter was previously configured. Ruff now provides minimal import/error
+checks and consistent 100-column formatting; the standard-library progress renderer adds
+no runtime dependency. Install/check with:
+
+```bash
+python -m pip install -r requirements-dev.txt
+ruff format --check .
+ruff check .
+python -m pytest -q
+```
+
+Formatting changes are mechanical; existing agent behavior and generated-code safety
+checks remain covered by regression tests. See `AGENTS.md` for engineering conventions.
+
+Troubleshooting:
+- **QA blocked:** review code/dependencies, use its dedicated Python 3.12 QA environment,
+  then explicitly authorize execution. No automatic dependency installation occurs.
+- **Paused for approval:** inspect `approval_request.json`; use `decide`, not clarification
+  `--answers`. Missing feedback or an outdated revision does not consume the interrupt.
+- **Interrupted process:** use `resume --run-id <id> --retry-development` for pending
+  checkpointed work. A pending approval still requires `decide`. The same resume command
+  can re-export a completed manifest after an export failure, without a new decision.
+- **Stale/changed managed files:** do not overwrite hashes or bypass validation; review
+  the changes and start a new run. A write barrier is not protection from other host code.
+- **Failure or exhaustion:** inspect `events.jsonl`, `execution.log`, `status.json` and
+  `recovery_history.json`. Never reset retry counters to bypass the two-repair bound.
+
+Local execution remains trusted and unsandboxed. LLM review and static guard checks are
+fallible. Logs are best-effort observability, not authoritative audit storage, and artifact
+exports occur after invocation checkpoints; keep the entire run directory private.

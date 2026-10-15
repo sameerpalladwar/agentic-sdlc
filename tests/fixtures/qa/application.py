@@ -1,4 +1,6 @@
 """Trusted hand-written fixture application for QA runner integration only."""
+
+
 class LinkStore:
     def __init__(self):
         self.links: dict[str, str] = {}

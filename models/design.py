@@ -1,3 +1,5 @@
+"""Structured technical design and story-traceability contracts."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field

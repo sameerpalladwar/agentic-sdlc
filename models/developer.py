@@ -1,3 +1,5 @@
+"""Structured file changes and statically claimed implementation coverage."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field

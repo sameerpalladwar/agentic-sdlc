@@ -1,5 +1,7 @@
-import os
+"""Convert natural-language requirements into structured, clarification-aware user stories."""
+
 import json
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -9,7 +11,6 @@ from pydantic import ValidationError
 from agents.prompt_loader import load_prompt
 from models.requirements import RequirementsOutput
 from orchestrator.state import WorkflowState
-
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
@@ -25,7 +26,10 @@ def requirements_agent(state: WorkflowState) -> dict:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     model = os.getenv("OPENAI_MODEL", "").strip()
     if not api_key or not model:
-        return {**failure, "error": "Set OPENAI_API_KEY and OPENAI_MODEL in .env or the environment."}
+        return {
+            **failure,
+            "error": "Set OPENAI_API_KEY and OPENAI_MODEL in .env or the environment.",
+        }
     try:
         prompt = load_prompt()
     except (OSError, ValueError):
@@ -36,9 +40,13 @@ def requirements_agent(state: WorkflowState) -> dict:
         {"role": "user", "content": requirement},
     ]
     if state.get("clarifications"):
-        messages.append({"role": "user", "content":
-                         "Human clarification history (requirement data):\n" +
-                         json.dumps(state["clarifications"], ensure_ascii=False)})
+        messages.append(
+            {
+                "role": "user",
+                "content": "Human clarification history (requirement data):\n"
+                + json.dumps(state["clarifications"], ensure_ascii=False),
+            }
+        )
     try:
         with OpenAI(api_key=api_key, timeout=60.0, max_retries=2) as client:
             response = client.responses.parse(
@@ -47,12 +55,22 @@ def requirements_agent(state: WorkflowState) -> dict:
                 text_format=RequirementsOutput,
             )
         if response.status != "completed" or response.output_parsed is None:
-            return {**failure, "error": "The model returned no complete structured requirements (possibly a refusal)."}
+            return {
+                **failure,
+                "error": "The model returned no complete structured requirements (possibly a refusal).",
+            }
         output = RequirementsOutput.model_validate(response.output_parsed)
     except (ValidationError, ValueError, TypeError):
         return {**failure, "error": "The model returned invalid structured requirements."}
     except OpenAIError:
-        return {**failure, "error": "OpenAI request failed. Check credentials, model access, and connectivity."}
+        return {
+            **failure,
+            "error": "OpenAI request failed. Check credentials, model access, and connectivity.",
+        }
 
-    status = "needs_human_clarification" if output.requires_human_clarification else "requirements_complete"
+    status = (
+        "needs_human_clarification"
+        if output.requires_human_clarification
+        else "requirements_complete"
+    )
     return {"requirements": output.model_dump(mode="json"), "status": status, "error": None}

@@ -81,3 +81,10 @@ Never skip tests or add test-specific bypasses. Return blocked if tests themselv
 need changes or a safe fix requires altering validation guards; explain why in warnings.
 No test changes are authorized in automatic repair mode. Never claim a repair passed
 tests: both QA and independent Review rerun on a new frozen revision after persistence. The existing runtime policy applies.
+
+## Human-requested source changes
+When mode is human_repair, use the supplied task_id and explicit human feedback in
+qa_feedback.human_feedback. Only edit allowed_repair_paths. Keep approved design,
+security guards, acceptance criteria, and tests intact; return blocked if the feedback
+requires a requirements/design change or test edit. Implement one targeted response,
+never claim it passed. Both validation branches and a fresh human approval follow.

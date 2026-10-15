@@ -1,3 +1,5 @@
+"""Translate approved requirements and design into a validated execution DAG."""
+
 import json
 import os
 
@@ -23,29 +25,42 @@ def planning_agent(state: WorkflowState) -> dict:
     except (ValidationError, ValueError, TypeError):
         return {**failure, "error": "Planning requires valid structured requirements and design."}
     if state.get("status") != "design_complete" or requirements.requires_human_clarification:
-        return {**failure, "error": "Planning requires completed design without blocking clarification."}
+        return {
+            **failure,
+            "error": "Planning requires completed design without blocking clarification.",
+        }
 
     load_dotenv(ENV_PATH)
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     model = os.getenv("OPENAI_MODEL", "").strip()
     if not api_key or not model:
-        return {**failure, "error": "Set OPENAI_API_KEY and OPENAI_MODEL in .env or the environment."}
+        return {
+            **failure,
+            "error": "Set OPENAI_API_KEY and OPENAI_MODEL in .env or the environment.",
+        }
     try:
         prompt = load_prompt(PLANNING_PROMPT)
     except (OSError, ValueError):
         return {**failure, "error": "Unable to load the planning prompt."}
-    context = {"requirements": requirements.model_dump(mode="json"),
-               "design": design.model_dump(mode="json")}
+    context = {
+        "requirements": requirements.model_dump(mode="json"),
+        "design": design.model_dump(mode="json"),
+    }
     try:
         with OpenAI(api_key=api_key, timeout=60.0, max_retries=2) as client:
             response = client.responses.parse(
                 model=model,
-                input=[{"role": "system", "content": prompt},
-                       {"role": "user", "content": json.dumps(context, ensure_ascii=False)}],
+                input=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                ],
                 text_format=ExecutionPlan,
             )
         if response.status != "completed" or response.output_parsed is None:
-            return {**failure, "error": "The model returned no complete structured plan (possibly a refusal)."}
+            return {
+                **failure,
+                "error": "The model returned no complete structured plan (possibly a refusal).",
+            }
         plan = ExecutionPlan.model_validate(response.output_parsed)
     except ValidationError:
         return {**failure, "error": "The model returned an invalid plan schema."}
@@ -54,7 +69,10 @@ def planning_agent(state: WorkflowState) -> dict:
     except TypeError:
         return {**failure, "error": "The model returned an invalid plan."}
     except OpenAIError:
-        return {**failure, "error": "OpenAI planning request failed. Check credentials, model access, and connectivity."}
+        return {
+            **failure,
+            "error": "OpenAI planning request failed. Check credentials, model access, and connectivity.",
+        }
     try:
         plan = validate_execution_plan(plan, requirements)
     except ValueError as exc:

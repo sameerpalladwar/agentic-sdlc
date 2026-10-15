@@ -1,4 +1,5 @@
 """Conservative run-local writer. Never imports or executes generated code."""
+
 import ast
 import fcntl
 import hashlib
@@ -11,7 +12,6 @@ from pathlib import Path, PurePosixPath
 from models.developer import DeveloperOutput
 from models.planning import validate_artifact_path
 
-
 OUTPUT_ROOT = Path(__file__).resolve().parents[1] / "workspace" / "output_code"
 MAX_FILE_BYTES = 500_000
 MAX_TOTAL_BYTES = 2_000_000
@@ -22,17 +22,60 @@ def digest(content: str) -> str:
 
 
 def relative_artifact(path: str) -> Path:
+    """Validate a generated path and return its relative destination without permitting
+    sensitive files.
+    """
     validate_artifact_path(path)
     relative = PurePosixPath(path).parts[2:]
     for part in relative:
         lower = part.lower()
-        if (not re.fullmatch(r"[A-Za-z0-9_.-]+", part) or
-                part.startswith(".") and part != ".gitignore" or part.endswith(".") or
-                lower.split(".")[0] in {"con", "prn", "aux", "nul", *[f"com{i}" for i in range(1, 10)], *[f"lpt{i}" for i in range(1, 10)]} or
-                any(word in lower for word in ("credential", "secret", "private_key", "id_rsa", "token", "password", "api_key", "apikey")) or
-                lower.endswith((".pem", ".key", ".p12", ".pfx"))):
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.-]+", part)
+            or part.startswith(".")
+            and part != ".gitignore"
+            or part.endswith(".")
+            or lower.split(".")[0]
+            in {
+                "con",
+                "prn",
+                "aux",
+                "nul",
+                *[f"com{i}" for i in range(1, 10)],
+                *[f"lpt{i}" for i in range(1, 10)],
+            }
+            or any(
+                word in lower
+                for word in (
+                    "credential",
+                    "secret",
+                    "private_key",
+                    "id_rsa",
+                    "token",
+                    "password",
+                    "api_key",
+                    "apikey",
+                )
+            )
+            or lower.endswith((".pem", ".key", ".p12", ".pfx"))
+        ):
             raise ValueError("Unsafe or sensitive generated file name.")
-    if Path(relative[-1]).suffix.lower() not in {".py", ".md", ".txt", ".toml", ".json", ".sql", ".ini", ".cfg", ".html", ".css", ".js"} and relative[-1] != ".gitignore":
+    if (
+        Path(relative[-1]).suffix.lower()
+        not in {
+            ".py",
+            ".md",
+            ".txt",
+            ".toml",
+            ".json",
+            ".sql",
+            ".ini",
+            ".cfg",
+            ".html",
+            ".css",
+            ".js",
+        }
+        and relative[-1] != ".gitignore"
+    ):
         raise ValueError("Unsupported generated file type.")
     return Path(*relative)
 
@@ -44,6 +87,9 @@ def reject_symlinks(path: Path) -> None:
 
 
 def atomic_write(path: Path, content: str) -> None:
+    """Replace a validated destination atomically to avoid exposing partially written source
+    or artifacts.
+    """
     reject_symlinks(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".write-", dir=path.parent)
@@ -61,6 +107,7 @@ def atomic_write(path: Path, content: str) -> None:
 
 class SafeWorkspace:
     """Use a write-ahead journal and task receipts for safe replay after checkpoint loss."""
+
     def __init__(self, run_id: str):
         if not re.fullmatch(r"[a-f0-9]{32}", run_id):
             raise ValueError("Invalid output run ID.")
@@ -71,12 +118,19 @@ class SafeWorkspace:
         self.lock_path = self.root / ".developer.lock"
 
     def __enter__(self):
+        """Acquire the run-local write lock and load its journal; release on error or context
+        exit.
+        """
         reject_symlinks(self.lock_path)
         self.lock = self.lock_path.open("a")
         try:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             reject_symlinks(self.manifest_path)
-            self.manifest = json.loads(self.manifest_path.read_text()) if self.manifest_path.exists() else {"files": {}, "receipts": {}, "pending": None}
+            self.manifest = (
+                json.loads(self.manifest_path.read_text())
+                if self.manifest_path.exists()
+                else {"files": {}, "receipts": {}, "pending": None}
+            )
         except Exception:
             self.lock.close()
             raise
@@ -96,7 +150,9 @@ class SafeWorkspace:
         """Read only managed files; detect manual changes before generating more code."""
         snapshot: dict[str, str] = {}
         pending = self.manifest.get("pending")
-        pending_files = {f["path"]: digest(f["content"]) for f in pending["output"]["files"]} if pending else {}
+        pending_files = (
+            {f["path"]: digest(f["content"]) for f in pending["output"]["files"]} if pending else {}
+        )
         for path, record in self.manifest["files"].items():
             target = self.target(path)
             if not target.is_file():
@@ -125,8 +181,16 @@ class SafeWorkspace:
         return None
 
     def persist(self, output: DeveloperOutput, fingerprint: str) -> list[str]:
-        if self.manifest.get("validation_revision"):
-            raise ValueError("Developer writes are blocked during validation.")
+        """Validate all output files before writes, then journal receipts for crash-safe
+        replay.
+        """
+        if any(
+            self.manifest.get(key)
+            for key in ("validation_revision", "approval_revision", "delivery_revision")
+        ):
+            raise ValueError(
+                "Developer writes are blocked during validation, approval, or after delivery."
+            )
         paths = [file.path for file in output.files]
         if len(paths) != len(set(paths)):
             raise ValueError("Duplicate generated paths.")
@@ -135,7 +199,12 @@ class SafeWorkspace:
         if len(output.files) > 100:
             raise ValueError("Too many files in a single task output.")
         pending = self.manifest.get("pending")
-        recovery = bool(pending and pending["task_id"] == output.task_id and pending["fingerprint"] == fingerprint and pending["output"] == output.model_dump())
+        recovery = bool(
+            pending
+            and pending["task_id"] == output.task_id
+            and pending["fingerprint"] == fingerprint
+            and pending["output"] == output.model_dump()
+        )
         # Validate the whole response and every destination before any application write.
         targets = []
         for file in output.files:
@@ -145,7 +214,9 @@ class SafeWorkspace:
                     break
                 if parent.exists() and not parent.is_dir():
                     raise ValueError("Generated parent path is not a directory.")
-            if any(target in previous.parents or previous in target.parents for _, previous in targets):
+            if any(
+                target in previous.parents or previous in target.parents for _, previous in targets
+            ):
                 raise ValueError("Generated file paths conflict with directory paths.")
             if len(file.content.encode()) > MAX_FILE_BYTES:
                 raise ValueError("Generated file exceeds the size budget.")
@@ -162,12 +233,22 @@ class SafeWorkspace:
                 if actual not in permitted:
                     raise ValueError("Refusing to overwrite an unrelated or modified file.")
             targets.append((file, target))
-        self.manifest["pending"] = {"task_id": output.task_id, "fingerprint": fingerprint, "output": output.model_dump()}
+        self.manifest["pending"] = {
+            "task_id": output.task_id,
+            "fingerprint": fingerprint,
+            "output": output.model_dump(),
+        }
         atomic_write(self.manifest_path, json.dumps(self.manifest))
         for file, target in targets:
             atomic_write(target, file.content)
-            self.manifest["files"][file.path] = {"hash": digest(file.content), "task_id": output.task_id}
-        self.manifest["receipts"][output.task_id] = {"fingerprint": fingerprint, "output": output.model_dump()}
+            self.manifest["files"][file.path] = {
+                "hash": digest(file.content),
+                "task_id": output.task_id,
+            }
+        self.manifest["receipts"][output.task_id] = {
+            "fingerprint": fingerprint,
+            "output": output.model_dump(),
+        }
         self.manifest["pending"] = None
         atomic_write(self.manifest_path, json.dumps(self.manifest))
         return [str(target) for _, target in targets]

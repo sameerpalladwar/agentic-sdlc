@@ -1,8 +1,9 @@
+"""Task DAG schema and normalized generated-artifact paths."""
+
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
-
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 TaskStatus = Literal["pending", "ready", "in_progress", "completed", "blocked", "failed"]
@@ -11,9 +12,14 @@ TaskStatus = Literal["pending", "ready", "in_progress", "completed", "blocked", 
 def validate_artifact_path(path: str) -> str:
     """Plans may name files only under the approved generated-code directory."""
     parts = PurePosixPath(path).parts
-    if ("\\" in path or ":" in path or ".." in parts or
-            len(parts) < 3 or parts[:2] != ("workspace", "output_code") or
-            str(PurePosixPath(path)) != path):
+    if (
+        "\\" in path
+        or ":" in path
+        or ".." in parts
+        or len(parts) < 3
+        or parts[:2] != ("workspace", "output_code")
+        or str(PurePosixPath(path)) != path
+    ):
         raise ValueError("Artifact paths must be normalized files under workspace/output_code/.")
     return path
 

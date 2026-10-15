@@ -1,3 +1,5 @@
+"""Generate one structured task or repair response without executing model commands."""
+
 import json
 import os
 
@@ -23,9 +25,12 @@ def generate_task(context: dict) -> DeveloperOutput:
     try:
         with OpenAI(api_key=key, timeout=90.0, max_retries=0) as client:
             response = client.responses.parse(
-                model=model, text_format=DeveloperOutput,
-                input=[{"role": "system", "content": prompt},
-                       {"role": "user", "content": json.dumps(context, ensure_ascii=False)}],
+                model=model,
+                text_format=DeveloperOutput,
+                input=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                ],
             )
         if response.status != "completed" or response.output_parsed is None:
             raise ValueError("The model returned no complete developer output.")

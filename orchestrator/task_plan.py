@@ -1,3 +1,5 @@
+"""Deterministic plan coverage, ownership, dependency validation, and readiness."""
+
 from collections import deque
 
 from models.planning import ExecutionPlan, ImplementationTask

@@ -1,5 +1,6 @@
-from pathlib import Path
+"""Resolve versioned Markdown instructions independently of the working directory."""
 
+from pathlib import Path
 
 REQUIREMENTS_PROMPT = Path(__file__).resolve().parents[1] / "prompts" / "requirements.md"
 

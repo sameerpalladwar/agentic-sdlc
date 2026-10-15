@@ -1,4 +1,5 @@
 """Hand-written intentional failure for runner integration testing."""
+
 from application import LinkStore
 
 

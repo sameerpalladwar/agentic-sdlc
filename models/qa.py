@@ -1,3 +1,5 @@
+"""Actual pytest evidence and explicitly unverified acceptance-criterion results."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field

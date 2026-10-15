@@ -1,3 +1,5 @@
+"""Validated user stories, acceptance criteria, and clarification output contracts."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator

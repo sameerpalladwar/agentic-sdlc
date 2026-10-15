@@ -7,7 +7,7 @@ import run
 
 
 def call(capsys, arguments):
-    code = run.main(arguments)
+    code = run.main([*arguments, "--json"])
     captured = capsys.readouterr()
     return code, json.loads(captured.out or captured.err)
 
@@ -35,11 +35,15 @@ def test_resume_after_reopening_checkpoint(capsys, llm_response, payload):
     payload.update(requires_human_clarification=True, open_questions=["Which users?"])
     _, paused = call(capsys, ["start", "--requirement", "Build an app"])
     payload.update(requires_human_clarification=False, open_questions=[])
-    code, done = call(capsys, ["resume", "--run-id", paused["run_id"], "--answers", "Public users; shorten URLs."])
+    code, done = call(
+        capsys, ["resume", "--run-id", paused["run_id"], "--answers", "Public users; shorten URLs."]
+    )
     assert code == 0
     assert done["status"] == "requirements_complete"
     assert done["run_id"] == paused["run_id"]
-    assert done["clarifications"] == [{"questions": ["Which users?"], "answers": "Public users; shorten URLs."}]
+    assert done["clarifications"] == [
+        {"questions": ["Which users?"], "answers": "Public users; shorten URLs."}
+    ]
     assert llm_response.call_count == 2
     messages = llm_response.call_args.kwargs["input"]
     assert messages[1]["content"] == "Build an app"
@@ -95,7 +99,9 @@ def test_llm_failure_after_resume(capsys, llm_response, payload):
     payload.update(requires_human_clarification=True, open_questions=["Which users?"])
     _, paused = call(capsys, ["start", "--requirement", "Build an app"])
     llm_response.return_value = SimpleNamespace(status="completed", output_parsed=None)
-    code, failed = call(capsys, ["resume", "--run-id", paused["run_id"], "--answers", "Public users"])
+    code, failed = call(
+        capsys, ["resume", "--run-id", paused["run_id"], "--answers", "Public users"]
+    )
     assert code == 1
     assert failed["status"] == "failed"
     assert failed["requirements"] is None
@@ -111,7 +117,11 @@ def test_empty_input(capsys, isolated_llm):
 
 def test_cli_requires_argument():
     with pytest.raises(SystemExit) as error:
-        run.main([])
+        run.main(
+            [
+                "--json",
+            ]
+        )
     assert error.value.code == 2
 
 
@@ -134,7 +144,8 @@ def test_resume_across_processes(tmp_path):
     """Both CLI processes use real SQLite checkpoints and an offline fake LLM node."""
     import subprocess
     import sys
-    script = '''
+
+    script = """
 import sys
 from pathlib import Path
 import run
@@ -149,12 +160,18 @@ def offline_requirements(state):
 
 workflow.requirements_agent = offline_requirements
 run.RUNS_DIR = Path(sys.argv[1])
-raise SystemExit(run.main(sys.argv[2:]))
-'''
+raise SystemExit(run.main([*sys.argv[2:], "--json"]))
+"""
+
     def process(*args):
-        completed = subprocess.run([sys.executable, "-c", script, str(tmp_path / "runs"), *args],
-                                   capture_output=True, text=True, check=True)
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path / "runs"), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         return json.loads(completed.stdout)
+
     clear = process("start", "--requirement", "Shorten URLs")
     assert clear["status"] == "requirements_complete"
     paused = process("start", "--requirement", "Build an app")

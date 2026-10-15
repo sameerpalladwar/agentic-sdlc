@@ -9,9 +9,18 @@ def test_model_round_trip(payload):
     assert RequirementsOutput.model_validate_json(result.model_dump_json()) == result
 
 
-@pytest.mark.parametrize("change", [
-    "priority", "criteria", "blank", "duplicate", "clarification", "empty_stories", "extra",
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "priority",
+        "criteria",
+        "blank",
+        "duplicate",
+        "clarification",
+        "empty_stories",
+        "extra",
+    ],
+)
 def test_invalid_models(payload, change):
     if change == "priority":
         payload["user_stories"][0]["priority"] = "urgent"
